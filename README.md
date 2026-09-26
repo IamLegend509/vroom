@@ -13,7 +13,8 @@ All RL pipeline, motor registry, run viz live here.
 - `configs/motors/` — new motors go here as YAML (assumed sim params, not measured).
 - `hw/arty/` — placeholder only. No flashing/export/quant (out of scope).
 - `hw/focmini/` — ESP32 bring-up firmware for the DFRobot SimpleFOCmini
-  (DRI0058). Kept separate from the simulation harness.
+  (DRI0058), with PlatformIO and native ESP-IDF build paths. Kept separate from
+  the simulation harness.
 
 ## Scope
 

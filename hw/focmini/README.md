@@ -1,8 +1,9 @@
 # DFRobot SimpleFOCmini (DRI0058) + ESP32
 
-This is an **implemented, buildable target** with separate sensorless open-loop
-bring-up and optional AS5600 closed-loop velocity modes. It deliberately does
-not export, quantize, or execute an RL policy.
+This is an **implemented bring-up target** with separate sensorless open-loop
+bring-up and optional AS5600 closed-loop velocity modes. The native ESP-IDF
+project is in `idf/`; the PlatformIO Arduino project remains available in this
+directory. Neither exports, quantizes, or executes an RL policy.
 
 ## Wiring
 
@@ -48,17 +49,20 @@ shaft axis. Keep the motor supply off while checking sensor I²C and alignment.
 
 ## Configuration and safety
 
-Before upload, edit `src/main.cpp` with measured data:
+Before upload, set the parameters in the selected build system:
 
-- `kMotorPolePairs` (the default `0` intentionally disarms the firmware);
-- `kBusVoltageV` (measured supply voltage in V; board range is 8–30 V);
-- conservative `kVoltageLimitV` (V; leave at 0.50 V for first spin);
-- actual PWM, enable, reset, sleep, fault, ground, and motor-phase wiring.
+- PlatformIO: edit `src/main.cpp`; pole pairs default to `0` (disarmed), and
+  `kBusVoltageV` must match the measured supply in V;
+- ESP-IDF: configure verified pole pairs and measured bus voltage in
+  `idf.py menuconfig`; both default to `0` (disarmed);
+- both builds: retain a conservative `0.50 V` initial voltage limit and verify
+  PWM, enable, reset, sleep, fault, ground, and motor-phase wiring.
 
-The program starts with EN and SLEEP low, rejects an active fault, and latches a
-falling FAULT edge by disabling the stage. This is a basic software interlock,
-not a safety system: it cannot detect wiring errors or enforce current. Use a
-current-limited supply, unloaded motor, and physical disconnect for first test.
+Both programs start with EN and SLEEP low and reject an active fault. PlatformIO
+latches a falling FAULT edge; ESP-IDF polls FAULT and latches a low level. These
+are basic software interlocks, not a safety system: they cannot detect wiring
+errors or enforce current. Use a current-limited supply, unloaded motor, and
+physical disconnect for first test.
 The default build uses `velocity_openloop`, so it does not use the AS5600 and
 cannot regulate speed under load. The optional AS5600 build uses closed-loop
 velocity control. When ready, power the AS5600 from the ESP32's 3.3-V rail,
@@ -67,6 +71,43 @@ connect its ground to the common ground, connect SDA to GPIO 21 and SCL to GPIO
 AS5600 build until the wiring and magnet alignment are verified.
 
 ## Build
+
+### Native ESP-IDF (recommended for teammates)
+
+The IDF project uses Espressif's managed [`esp_simplefoc` component](https://docs.espressif.com/projects/esp-iot-solution/en/latest/motor/foc/esp_simplefoc.html),
+based on Arduino-FOC APIs, rather than building Arduino-FOC directly as an
+Arduino library. The project manifest pins component version 1.4.1 and accepts
+ESP-IDF 5.3.x through 5.x (not IDF 6.x). ESP-IDF itself is installed per developer;
+the component manager downloads the pinned FOC component and dependencies on
+the first build. The default menu configuration leaves the motor disarmed.
+
+From `hw/focmini/idf` in an ESP-IDF 5.x terminal:
+
+```bash
+idf.py set-target esp32
+idf.py menuconfig
+# FOCMini motor setup: enter measured bus voltage and verified pole pairs.
+# Keep AS5600 disabled for the first open-loop spin.
+idf.py build
+idf.py -p /dev/ttyUSB0 flash monitor
+```
+
+Use the serial command `T1` to request 1 rad/s, or `T0` to stop commanding
+rotation. Commands are bounded by the configured velocity limit. Replace the
+serial port with the one detected on your computer. The first build downloads
+`espressif/esp_simplefoc` 1.4.1 through ESP-IDF's component manager; use an
+internet connection. FreeRTOS tick rate is set to 1000 Hz because the control
+loop schedules at 1 ms. To enable AS5600 later, configure
+`FOCMINI_USE_AS5600=y` in menuconfig only after sensor wiring and magnet
+alignment are checked. AS5600 uses SDA GPIO 21 and SCL GPIO 22.
+
+ESP-IDF is not installed in the repository environment used to prepare this
+change, so the native IDF project has **not yet been compiled or flashed**.
+The PlatformIO build results below apply only to the Arduino implementation,
+not this new IDF adapter. Review component/API compatibility with the chosen
+ESP-IDF install before powering the motor.
+
+### PlatformIO (existing alternative)
 
 From the repository root, install PlatformIO once if `.venv/bin/pio` is absent:
 

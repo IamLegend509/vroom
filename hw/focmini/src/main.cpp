@@ -30,13 +30,13 @@ constexpr int kI2cSda = 21, kI2cScl = 22;
 #endif
 constexpr float kAlignmentVoltageV = 0.30f;
 // Enter the measured supply voltage. Zero deliberately keeps a new checkout off.
-constexpr float kBusVoltageV = 0.0f;
+constexpr float kBusVoltageV = 9.0f;
 constexpr float kVoltageLimitV = 0.50f;
-constexpr float kVelocityLimitRadPerSec = 20.0f;
+constexpr float kVelocityLimitRadPerSec = 5.0f;
 
 // Set from verified motor data (14 magnet poles means 7 pole pairs).
 // Zero deliberately keeps a new checkout off.
-constexpr int kMotorPolePairs = 0;
+constexpr int kMotorPolePairs = 7;
 volatile bool fault_latched = false;
 
 void IRAM_ATTR on_fault() { fault_latched = true; }
@@ -67,7 +67,10 @@ void setup() {
   pinMode(kSleep, OUTPUT);
   pinMode(kFault, INPUT);
   disable_power_stage();
+  digitalWrite(kReset, LOW);
+  delay(10);
   digitalWrite(kReset, HIGH);
+  delay(10);
   attachInterrupt(digitalPinToInterrupt(kFault), on_fault, FALLING);
 
   if (!configuration_is_safe()) {

@@ -2,6 +2,9 @@ __pycache__/
 *.pyc
 .venv/
 .pio/
+hw/focmini/idf/build/
+hw/focmini/idf/managed_components/
+hw/focmini/idf/dependencies.lock
 results/
 *.zip
 *.pkl
