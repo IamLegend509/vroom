@@ -15,18 +15,20 @@ config FOCMINI_POLE_PAIRS
 		Zero disarms the motor. This is pole pairs, not the number of poles.
 
 config FOCMINI_VOLTAGE_LIMIT_MV
-	int "Initial motor voltage limit (mV)"
+	int "Initial motor phase amplitude limit (mV)"
 	 range 100 30000
 	 default 500
 	 help
-		Start conservatively. This voltage-mode controller cannot enforce current.
+		This is the motor phase amplitude, not the driver's full bus-voltage range.
+		Centered sine modulation requires twice this amplitude to fit within the bus.
+		Voltage-mode control cannot enforce current.
 
 config FOCMINI_VELOCITY_LIMIT_MRAD_S
-	int "Velocity command limit (millirad/s)"
-	 range 1 200000
-	 default 20000
+	int "Velocity command limit (millirad/s, maximum 5 rad/s)"
+	 range 1 5000
+	 default 5000
 	 help
-		Initial default is 20 rad/s (about 191 RPM), not a measured motor rating.
+		Initial bring-up limit is 5 rad/s (about 48 RPM), not a measured motor rating.
 
 config FOCMINI_USE_AS5600
 	bool "Use AS5600 closed-loop velocity mode"

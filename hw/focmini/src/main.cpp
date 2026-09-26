@@ -1,18 +1,30 @@
-// DFRobot DRI0058 SimpleFOCmini + ESP32 bring-up target.
+// DFRobot DRI0058 SimpleFOCmini + original ESP32-WROOM bring-up target.
 //
-// Purpose: fail-safe open-loop bring-up plus an optional AS5600 closed-loop mode.
-// NOT an RL deployment target and contains no exported policy. The simulator
-// remains the source for all controller studies.
-//
-// Units: SimpleFOC velocity targets are rad/s; voltage_limit is V. This wiring
-// has no phase-current sensing, so voltage command is not current/torque control.
-// The board's 2.5 A/channel rating is not enforceable by this firmware.
-// Assumptions: DRI0058 3.3-V logic; optional AS5600 is selected at build time.
-// Limits: GPIO mapping is proposed for ESP32 DevKit only; verify all wiring.
-// Repro (build only): platformio run -d hw/focmini
+// Purpose: guarded open-loop first spin and optional AS5600 closed-loop mode.
+// This is simulation-adjacent bring-up firmware, not an RL deployment target.
+// Units: targets and limits are mechanical rad/s; voltages are V. The 1.50 V
+// motor amplitude is a phase-vector command, while the driver range is the
+// full 9 V bus. Centered sine modulation needs 2*amplitude <= driver range.
+// Assumptions: DRI0058, measured 9 V supply, verified 7 pole pairs, original
+// ESP32-WROOM GPIO map below, unloaded motor, and no current sensing. Voltage
+// control cannot enforce the driver's 2.5 A/channel rating. Repro (build only):
+// `pio run -d hw/focmini -e esp32dev_open_loop` (AS5600: esp32dev_as5600).
 
 #include <Arduino.h>
 #include <SimpleFOC.h>
+
+#include <cmath>
+
+#include "../shared/focmini_control.h"
+#include "driver/gpio.h"
+#include "esp_intr_alloc.h"
+#include "freertos/FreeRTOS.h"
+#include "soc/gpio_reg.h"
+#include "soc/soc.h"
+
+#if !defined(CONFIG_IDF_TARGET_ESP32) || !CONFIG_IDF_TARGET_ESP32
+#error "FOCMini direct GPIO-bank cutoff is for original ESP32-WROOM only"
+#endif
 
 #ifndef FOCMINI_USE_AS5600
 #define FOCMINI_USE_AS5600 0
@@ -20,37 +32,147 @@
 #if FOCMINI_USE_AS5600
 #include <Wire.h>
 #endif
+
+extern BLDCMotor motor;
+
 namespace focmini {
-// IN1/IN2/IN3, EN, RESET, FAULT, SLEEP respectively.
+// DRI0058 IN1/IN2/IN3, external EN, RESET, active-low FAULT, SLEEP.
 constexpr int kPwmA = 25, kPwmB = 26, kPwmC = 27, kEnable = 32;
 constexpr int kReset = 33, kFault = 34, kSleep = 14;
-constexpr float kPwmFrequencyHz = 20'000.0f;
+constexpr float kPwmFrequencyHz = 20000.0f;
 #if FOCMINI_USE_AS5600
 constexpr int kI2cSda = 21, kI2cScl = 22;
 #endif
 constexpr float kAlignmentVoltageV = 0.30f;
-// Enter the measured supply voltage. Zero deliberately keeps a new checkout off.
-constexpr float kBusVoltageV = 9.0f;
-constexpr float kVoltageLimitV = 0.50f;
+constexpr float kBusVoltageV = 9.0f;  // Measured by the operator for this setup.
+constexpr float kDriverVoltageRangeV = kBusVoltageV;
+constexpr float kMotorVoltageAmplitudeV = 1.50f;
 constexpr float kVelocityLimitRadPerSec = 5.0f;
+constexpr int kMotorPolePairs = 7;  // Verified; this is pole pairs, not poles.
+constexpr int kSerialBytesPerLoop = 64;
 
-// Set from verified motor data (14 magnet poles means 7 pole pairs).
-// Zero deliberately keeps a new checkout off.
-constexpr int kMotorPolePairs = 7;
 volatile bool fault_latched = false;
+portMUX_TYPE power_mux = portMUX_INITIALIZER_UNLOCKED;
+CommandParser command_parser;
+MotionInterlock motion;
+bool driver_awake = false;
+bool foc_initialized = false;
+bool fault_reported = false;
 
-void IRAM_ATTR on_fault() { fault_latched = true; }
+// ESP32-WROOM register writes are IRAM-safe and do not depend on GPIO APIs that
+// may be placed in flash. EN is GPIO32 (bank 1); SLEEP is GPIO14 (bank 0).
+void IRAM_ATTR cut_external_gate_from_isr() {
+  REG_WRITE(GPIO_OUT1_W1TC_REG, 1U << (kEnable - 32));
+  REG_WRITE(GPIO_OUT_W1TC_REG, 1U << kSleep);
+}
 
-void disable_power_stage() {
+void IRAM_ATTR on_fault(void *) {
+  portENTER_CRITICAL_ISR(&power_mux);
+  fault_latched = true;
+  cut_external_gate_from_isr();
+  portEXIT_CRITICAL_ISR(&power_mux);
+}
+
+// In healthy idle the DRV8313 stays awake so nFAULT is valid; EN alone holds
+// the motor outputs disabled. The two-pin cutoff is reserved for a latched
+// fault or failed initialization.
+void disable_motor_output() {
+  digitalWrite(kEnable, LOW);
+}
+
+void cut_power_stage() {
   digitalWrite(kEnable, LOW);
   digitalWrite(kSleep, LOW);
 }
 
-bool configuration_is_safe() {
-  return kMotorPolePairs > 0 && kAlignmentVoltageV > 0.0f &&
-         kBusVoltageV >= 8.0f && kBusVoltageV <= 30.0f &&
-         kVoltageLimitV > 0.0f && kVoltageLimitV <= kBusVoltageV;
+bool enable_power_stage_if_healthy() {
+  bool enabled = false;
+  portENTER_CRITICAL(&power_mux);
+  if (driver_awake && !fault_latched && digitalRead(kFault) == HIGH) {
+    digitalWrite(kEnable, HIGH);
+    enabled = true;
+  } else {
+    fault_latched = true;
+    cut_external_gate_from_isr();
+  }
+  portEXIT_CRITICAL(&power_mux);
+  return enabled;
 }
+
+bool configuration_is_safe() {
+  return kMotorPolePairs > 0 && kBusVoltageV >= 8.0f &&
+         kBusVoltageV <= 30.0f && kDriverVoltageRangeV > 0.0f &&
+         kDriverVoltageRangeV <= kBusVoltageV &&
+         kMotorVoltageAmplitudeV > 0.0f &&
+         2.0f * kMotorVoltageAmplitudeV <= kDriverVoltageRangeV &&
+         kAlignmentVoltageV > 0.0f &&
+         kAlignmentVoltageV <= kMotorVoltageAmplitudeV &&
+         2.0f * kAlignmentVoltageV <= kDriverVoltageRangeV &&
+         kVelocityLimitRadPerSec > 0.0f &&
+         kVelocityLimitRadPerSec <= 5.0f;
+}
+
+void latch_shutdown(const char *message) {
+  fault_latched = true;
+  motion.latch_fault();
+  driver_awake = false;
+  cut_power_stage();
+  if (!fault_reported) {
+    if (message != nullptr) Serial.println(message);
+    fault_reported = true;
+  }
+}
+
+void service_fault() {
+  if (fault_latched || digitalRead(kFault) == LOW) {
+    latch_shutdown("FAULT/STARTUP FAILURE LATCHED: stage off; reboot after inspection.");
+  }
+}
+
+void stop_motion() {
+  motion.stop();
+  motor.target = 0.0f;
+  disable_motor_output();
+}
+
+bool wake_driver_and_check_fault() {
+  // DRV8313 nSLEEP needs settling time before the bridge is operational. The
+  // 10 ms wait is conservative relative to the ~1 ms datasheet wake interval.
+  // Keep external EN low throughout wake/reset and fault validation.
+  digitalWrite(kEnable, LOW);
+  digitalWrite(kSleep, HIGH);
+  delay(10);
+  digitalWrite(kReset, LOW);
+  delay(10);
+  digitalWrite(kReset, HIGH);
+  delay(10);
+
+  const bool fault_high_before_isr = digitalRead(kFault) == HIGH;
+  if (gpio_set_intr_type(static_cast<gpio_num_t>(kFault), GPIO_INTR_NEGEDGE) != ESP_OK ||
+      gpio_install_isr_service(ESP_INTR_FLAG_IRAM) != ESP_OK ||
+      gpio_isr_handler_add(static_cast<gpio_num_t>(kFault), on_fault, nullptr) != ESP_OK) {
+    latch_shutdown("DISARMED: IRAM FAULT interrupt setup failed.");
+    return false;
+  }
+
+  bool ready = false;
+  portENTER_CRITICAL(&power_mux);
+  if (fault_high_before_isr && !fault_latched && digitalRead(kFault) == HIGH) {
+    driver_awake = true;
+    ready = true;
+  } else {
+    fault_latched = true;
+    cut_external_gate_from_isr();
+  }
+  portEXIT_CRITICAL(&power_mux);
+  if (!ready || fault_latched || digitalRead(kFault) == LOW) {
+    latch_shutdown("DISARMED: DRI0058 FAULT is active after wake/reset.");
+    return false;
+  }
+  return true;
+}
+
+void apply_command(const Command &command);
 }  // namespace focmini
 
 using namespace focmini;
@@ -58,41 +180,106 @@ BLDCMotor motor(kMotorPolePairs);
 #if FOCMINI_USE_AS5600
 MagneticSensorI2C sensor = MagneticSensorI2C(AS5600_I2C);
 #endif
-BLDCDriver3PWM driver(kPwmA, kPwmB, kPwmC, kEnable);
+// Deliberately omit SimpleFOC's EN pin. Only guarded application code may
+// enable the external DRI0058 gate; motor.init() cannot re-enable it.
+BLDCDriver3PWM driver(kPwmA, kPwmB, kPwmC);
+
+namespace focmini {
+void apply_command(const Command &command) {
+  switch (command.type) {
+    case CommandType::kNone:
+      return;
+    case CommandType::kInvalid:
+      Serial.println("Rejected line: use ARM, T<rad/s> (<= 5), STOP, or T0.");
+      return;
+    case CommandType::kArm:
+      if (!motion.arm()) {
+        Serial.println("ARM rejected: setup is not ready or fault is latched.");
+        return;
+      }
+      // Re-ARM is a deliberate reset to zero: drop any old open-loop field
+      // before returning to the waiting-for-target state.
+      motor.target = 0.0f;
+      disable_motor_output();
+#if FOCMINI_USE_AS5600
+      if (!foc_initialized) {
+        if (!enable_power_stage_if_healthy()) {
+          latch_shutdown("ARM failed: FAULT active during calibration.");
+          return;
+        }
+        // Alignment is intentionally energized only after explicit ARM. The
+        // IRAM fault handler cuts EN/SLEEP even while initFOC() blocks.
+        if (!motor.initFOC() || fault_latched || digitalRead(kFault) == LOW) {
+          latch_shutdown("AS5600 alignment failed or FAULT occurred; reboot required.");
+          return;
+        }
+        foc_initialized = true;
+        disable_motor_output();
+      }
+      Serial.println("ARMED AS5600 mode; send T<rad/s> (<= 5), or STOP/T0.");
+#else
+      // Open-loop ARM only unlocks commands; it never energizes a zero field.
+      Serial.println("ARMED OPEN LOOP; send T1 for the first unloaded spin, or STOP/T0.");
+#endif
+      return;
+    case CommandType::kStop:
+      stop_motion();
+      Serial.println("STOPPED: target zero, EN low; send ARM before another target.");
+      return;
+    case CommandType::kTarget:
+      if (command.target_rad_per_sec == 0.0f) {
+        stop_motion();
+        Serial.println("STOPPED: T0 disarmed and set EN low.");
+        return;
+      }
+      if (!std::isfinite(command.target_rad_per_sec) ||
+          std::fabs(command.target_rad_per_sec) > kVelocityLimitRadPerSec) {
+        Serial.println("Rejected target: finite and within +/-5 rad/s required.");
+        return;
+      }
+      if (!motion.set_target(command.target_rad_per_sec,
+                             kVelocityLimitRadPerSec)) {
+        Serial.println("Target rejected: send ARM first; invalid lines do not change target.");
+        return;
+      }
+      motor.target = motion.target_rad_per_sec();
+      if (!enable_power_stage_if_healthy()) {
+        latch_shutdown("Target rejected: FAULT active; stage remains off.");
+        return;
+      }
+      Serial.println("Target accepted in rad/s.");
+      return;
+  }
+}
+}  // namespace focmini
 
 void setup() {
   Serial.begin(115200);
+  // Arduino-ESP32 requires pinMode before digitalWrite. Configure EN first
+  // and hold the output stage off before waking the driver.
   pinMode(kEnable, OUTPUT);
+  digitalWrite(kEnable, LOW);
   pinMode(kReset, OUTPUT);
   pinMode(kSleep, OUTPUT);
-  pinMode(kFault, INPUT);
-  disable_power_stage();
-  digitalWrite(kReset, LOW);
-  delay(10);
+  pinMode(kFault, INPUT);  // GPIO34 requires the external FAULT pull-up.
+  cut_power_stage();
   digitalWrite(kReset, HIGH);
-  delay(10);
-  attachInterrupt(digitalPinToInterrupt(kFault), on_fault, FALLING);
+  if (!wake_driver_and_check_fault()) return;
 
   if (!configuration_is_safe()) {
-    Serial.println("DISARMED: set measured kMotorPolePairs and limits.");
+    Serial.println("DISARMED: invalid pole-pair, bus, or voltage-range settings.");
     return;
   }
-  if (digitalRead(kFault) == LOW) {
-    fault_latched = true;
-    Serial.println("DISARMED: driver FAULT is active.");
-    return;
-  }
-
   driver.voltage_power_supply = kBusVoltageV;
+  driver.voltage_limit = kDriverVoltageRangeV;
+  driver.pwm_frequency = kPwmFrequencyHz;
 #if FOCMINI_USE_AS5600
   Wire.begin(kI2cSda, kI2cScl);
   sensor.init(&Wire);
   motor.linkSensor(&sensor);
 #endif
-  driver.pwm_frequency = kPwmFrequencyHz;
-  driver.voltage_limit = kVoltageLimitV;
   if (!driver.init()) {
-    Serial.println("DISARMED: PWM driver initialization failed.");
+    latch_shutdown("DISARMED: PWM driver initialization failed.");
     return;
   }
   motor.linkDriver(&driver);
@@ -101,49 +288,55 @@ void setup() {
 #else
   motor.controller = MotionControlType::velocity_openloop;
 #endif
-  motor.voltage_limit = kVoltageLimitV;
+  motor.voltage_limit = kMotorVoltageAmplitudeV;
   motor.velocity_limit = kVelocityLimitRadPerSec;
-  motor.init();
-
 #if FOCMINI_USE_AS5600
   motor.voltage_sensor_align = kAlignmentVoltageV;
 #endif
-  digitalWrite(kSleep, HIGH);
-  digitalWrite(kEnable, HIGH);
-#if FOCMINI_USE_AS5600
-  if (!motor.initFOC()) {
-    disable_power_stage();
-    Serial.println("DISARMED: AS5600 FOC alignment failed.");
+  if (!motor.init()) {
+    latch_shutdown("DISARMED: motor initialization failed.");
     return;
   }
-  Serial.println("ARMED AS5600 CLOSED LOOP: target 0 rad/s.");
+  if (fault_latched || digitalRead(kFault) == LOW) {
+    latch_shutdown("DISARMED: FAULT occurred during initialization.");
+    return;
+  }
+  motion.mark_ready();
+#if FOCMINI_USE_AS5600
+  Serial.println("READY DISARMED AS5600: send ARM to calibrate; then T<rad/s>.");
 #else
-  Serial.println("ARMED OPEN LOOP: target 0 rad/s. Send a target within limit.");
+  Serial.println("READY DISARMED OPEN LOOP: send ARM, then T1; STOP or T0 cuts power.");
 #endif
 }
 
 void loop() {
-  if (fault_latched) {
-    disable_power_stage();
-    Serial.println("FAULT LATCHED: cycle power and inspect wiring.");
-    while (true) delay(1000);
-  }
-  if (!configuration_is_safe()) {
-    delay(1000);
+  service_fault();
+  if (motion.fault_latched()) {
+    if (!fault_reported) {
+      cut_power_stage();
+      Serial.println("LATCHED: power cycle after checking the driver and wiring.");
+      fault_reported = true;
+    }
+    delay(100);
     return;
   }
 
-#if FOCMINI_USE_AS5600
-  motor.loopFOC();
-#endif
-  if (Serial.available()) {
-    const float target_rad_per_sec = Serial.parseFloat();
-    if (isfinite(target_rad_per_sec) &&
-        fabsf(target_rad_per_sec) <= kVelocityLimitRadPerSec) {
-      motor.target = target_rad_per_sec;
-    } else {
-      Serial.println("Rejected target: finite and within velocity_limit required.");
-    }
+  int serial_bytes = 0;
+  while (Serial.available() > 0 && serial_bytes < kSerialBytesPerLoop) {
+    const Command command = command_parser.feed(static_cast<char>(Serial.read()));
+    apply_command(command);
+    ++serial_bytes;
+    if (fault_latched) break;
   }
-  motor.move();
+  service_fault();
+  if (motion.fault_latched()) return;
+
+  if (motion.active()) {
+    motor.loopFOC();
+    if (fault_latched || digitalRead(kFault) == LOW) {
+      service_fault();
+      return;
+    }
+    motor.move(motion.target_rad_per_sec());
+  }
 }
