@@ -190,12 +190,51 @@ Focused shared parser/interlock tests run on macOS without an ESP32 toolchain:
 ./hw/focmini/tests/run_control_tests.sh
 ```
 
-## Optional AS5600 wiring
+## AS5600 closed-loop mode
 
-Power the sensor from ESP32 3.3 V; join grounds; wire SDA to GPIO 21 and SCL to
-GPIO 22. Center its magnet over the shaft axis. Validate the I²C reading and
-alignment before selecting the AS5600 profile. Alignment is energized only
-after an explicit `ARM` command and is protected by the same FAULT cutoff.
+The Arduino firmware already contains an optional AS5600 mode. It switches the
+motor controller from sensorless `velocity_openloop` to closed-loop `velocity`,
+links the I²C sensor, and delays FOC alignment until the explicit `ARM` command.
+The AS5600 profile compiled successfully on 2026-09-30; no AS5600 has been
+connected or physically tested by this change.
+
+With all motor power off, wire the AS5600 module to the original ESP32-WROOM:
+
+| AS5600 module | ESP32-WROOM |
+| --- | --- |
+| VCC | 3V3 (not 5 V) |
+| GND | GND (common with driver and supply negative) |
+| SDA | GPIO 21 |
+| SCL | GPIO 22 |
+
+Mount the diametrically magnetized encoder magnet on the motor shaft, centered
+over the AS5600 sensing axis, and set the sensor-to-magnet gap according to the
+sensor/module specification. The magnet must rotate with the rotor. Keep the
+motor unloaded and hands clear for the alignment step. Do not connect AS5600
+VCC to the DRI0058's low-current 3.3 V output; use the ESP32's 3V3 rail.
+
+Build and upload the AS5600 profile (replace the serial port with the one on
+your computer):
+
+```bash
+./.venv/bin/pio run -d hw/focmini -e esp32dev_as5600
+./.venv/bin/pio run -d hw/focmini -e esp32dev_as5600 -t upload \
+  --upload-port /dev/ttyUSB0
+./.venv/bin/pio device monitor -d hw/focmini -b 115200 \
+  --port /dev/ttyUSB0
+```
+
+Wait for `READY DISARMED AS5600`. Enter `ARM` to perform the sensor/rotor
+alignment; the motor may twitch during calibration. On success, the monitor
+reports `ARMED AS5600 mode`. Then enter `T1` for a 1 rad/s closed-loop target,
+and `STOP` to set zero and disable the output stage. `T0` also stops. If FAULT
+or alignment failure is reported, the stage is shut down and a reboot is
+required after inspection. A successful compile does not establish correct
+magnet placement, direction, or speed regulation on the physical motor.
+
+The native ESP-IDF app has the same optional mode. In its menuconfig, enable
+`FOCMINI_USE_AS5600`; its default remains disabled. The Arduino and IDF sensor
+pins are both SDA GPIO 21 / SCL GPIO 22.
 
 ## References
 
