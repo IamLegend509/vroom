@@ -6,49 +6,38 @@ This firmware is separate from the simulator and does not run an RL policy.
 
 ## Wiring
 
-The DRI0058 supply range is 8–30 V, output rating is 2.5 A/channel, logic
-accepts 3.3/5 V, and PWM must not exceed 200 kHz. The firmware pin map targets
-the original ESP32-WROOM module:
+Power: bench supply +9 V -> DRI0058 VCC; supply − -> DRI0058 power GND.
+Power the ESP32 by USB. ACS724 sensors require regulated 5 V, not 9 V; use a
+5 V buck from the supply if needed. Leave DRI0058 VDD/3.3 V unconnected.
 
-| ESP32-WROOM GPIO | DRI0058 pin | Role |
-| --- | --- | --- |
-| 25 / 26 / 27 | IN1 / IN2 / IN3 | phase PWM A/B/C |
-| 32 | EN | stage enable, active high |
-| 33 | RESET | driver reset, active low |
-| 14 | SLEEP | stage sleep, active low |
-| 34 | FAULT | active-low fault input; external 10 kΩ pull-up to 3.3 V |
-| GND | GND | common signal ground |
-| 21 / 22 | AS5600 SDA / SCL | optional sensor mode only |
+**Common GND:** bench supply −, DRI0058 GND, ESP32 GND, ACS724 #1/#2 GND,
+AS5600 GND, and 5 V buck GND.
 
-Connect motor phases only to M1/M2/M3 and motor supply only to VCC/GND. Do not
-power the ESP32 from the DRI0058 3.3 V output, rated at 10 mA. Use USB or a
-properly rated regulator and join signal grounds. GPIO 34 has no internal
-pull-up, so fit the external FAULT pull-up. Verify the header order against
-your board revision.
+| ESP32 pin | Connect to |
+| --- | --- |
+| GPIO25 / 26 / 27 | DRI0058 N1 / N2 / N3 |
+| GPIO32 | DRI0058 EN |
+| GPIO33 | DRI0058 RESET |
+| GPIO14 | DRI0058 SLEEP |
+| GPIO34 | DRI0058 FAULT; add 10 kΩ pull-up from this joined node to ESP32 3V3 |
+| GPIO21 / 22 | AS5600 SDA / SCL |
+| GPIO35 / 36 | ACS724 #1 / #2 OUT through separate dividers |
 
-```text
-Current-limited supply (+) ─────────────── DRI0058 VCC (8–30 V)
-Current-limited supply (−) ────────┬────── DRI0058 GND
-                                   └────── ESP32 GND
-ESP32 GPIO 25 / 26 / 27 ───────────────── DRI0058 IN1 / IN2 / IN3
-ESP32 GPIO 32 ──────────────────────────── DRI0058 EN
-ESP32 GPIO 33 ──────────────────────────── DRI0058 RESET
-ESP32 GPIO 14 ──────────────────────────── DRI0058 SLEEP
-ESP32 GPIO 34 ───────────────┬──────────── DRI0058 FAULT
-ESP32 3.3 V ─────────[10 kΩ]─┘
-Motor phase U/V/W ───────────────────────── DRI0058 M1/M2/M3
-ESP32 USB ───────────────────────────────── computer (serial + ESP32 power)
-```
+Motor and current sensors: DRI M1 -> ACS724 #1 IP+ -> IP− -> motor phase U;
+DRI M2 -> ACS724 #2 IP+ -> IP− -> phase V; DRI M3 -> phase W. These are the
+two Pololu ACS724 `05AB` ±5 A sensors. Connect each sensor VCC to regulated 5 V.
+For each OUT, connect OUT -> 10 kΩ -> ADC pin, with 18 kΩ from that ADC pin to
+common GND. Do not connect OUT directly to ESP32. DRI CS1/CS2/CS3 are unused.
 
-The ESP32 holds EN low, raises SLEEP once at boot, waits 10 ms, pulses RESET
-low/high, waits another 10 ms, then checks FAULT before and after installing its
-IRAM interrupt. TI specifies about 1 ms from nSLEEP rising until the DRV8313 is
-operational; the firmware uses 10 ms before RESET and 10 ms after releasing it.
-Healthy idle, ARM waiting, STOP, and T0 keep SLEEP high and EN low. Only a
-latched hardware fault or startup/calibration failure drives both low. GPIOs
-are high-impedance during ESP32 reset; confirm the driver's EN default is off
-before applying motor supply. External pull-downs on EN and SLEEP hold that
-state through reset.
+AS5600: VCC -> ESP32 3V3; GND -> common GND; SDA -> GPIO21; SCL -> GPIO22; OUT
+is unused in I²C mode. Check that the module's I²C pull-ups go to 3.3 V.
+
+The firmware pin map targets the original ESP32-WROOM. Keep motor power off
+while wiring; use secure connections for motor phases, and verify the DRI header
+labels against your board revision. The DRI0058 VDD output is limited to 10 mA;
+do not use it to power the sensors. FAULT is active low and GPIO34 has no
+internal pull-up. This wiring/configuration has not yet been physically
+validated with the ACS724 FOC setup.
 
 ## Firmware behavior
 
@@ -65,7 +54,9 @@ native ESP-IDF build retains its saved 0.50 V setting. AS5600 alignment uses
 0.30 V. For centered sine modulation, the validation requires
 `2 * amplitude <= driver range`; alignment amplitude must also be no greater
 than the motor amplitude. This prevents clipping of the requested initial
-waveform. It does not limit motor current: no phase-current sensor is present.
+waveform. In the AS5600 profile, phase-current feedback drives SimpleFOC's FOC
+current torque controller, limited in software to 0.5 A. This is not a hardware
+current cutoff; the open-loop profile remains voltage-driven and is not FOC.
 
 Startup is disarmed. `ARM` only unlocks commands in open-loop mode; it leaves
 EN low while SLEEP stays high. Send a complete `T<rad/s>` command to enable the stage and run
@@ -85,12 +76,13 @@ lines leave the prior target unchanged. Input parsing is limited to 64 bytes per
 iteration. Avoid flooding commands because serial logging can still delay
 control updates.
 
-With AS5600 mode selected, `ARM` energizes the stage only for `initFOC()`
-alignment. A failed alignment latches the shutdown until reboot; successful
-alignment leaves the gate disabled while the armed controller waits for a
-nonzero target.
-Open-loop mode skips calibration. Both modes call `loopFOC()` and `move()` on
-each active control iteration.
+With AS5600 mode selected, `ARM` energizes the stage for `initFOC()` rotor and
+current-sense alignment. A failed alignment latches the shutdown until reboot;
+successful alignment leaves the gate disabled while the armed controller waits
+for a nonzero target. Open-loop mode skips rotor/current-sense phase alignment
+and stays voltage-driven. It ignores AS5600 and ACS724; only the AS5600 FOC
+profile initializes the ACS724 current-sense objects. Both controller modes use
+the same guarded external EN/FAULT handling.
 
 FAULT is active low. The DRI0058 schematic pulls FAULT to the driver's V3P3
 rail. Firmware does not interpret the pin during sleep or the wake transition;
@@ -123,14 +115,23 @@ uv venv --python 3.12 .venv  # Fresh checkout only; skip if .venv exists.
 uv pip install --python .venv/bin/python -r hw/focmini/requirements-build.txt
 ```
 
-Then use `.venv/bin/pio` for these builds:
+Then use `.venv/bin/pio` for these builds. The `esp32dev_as5600` environment is
+the FOC application; `FOCMINI_PROGRAM` selects the source file and defaults to
+`main.cpp`. The sensorless diagnostic uses this same environment—no additional
+PlatformIO environment is needed:
 
 ```bash
-# Arduino-ESP32 + SimpleFOC 2.4.0
-./.venv/bin/pio run -d hw/focmini -e esp32dev_open_loop
+# Build the FOC application from main.cpp.
+FOCMINI_PROGRAM=main ./.venv/bin/pio run -d hw/focmini -e esp32dev_as5600
 
-# Optional AS5600 profile; calibration still waits for explicit ARM.
-./.venv/bin/pio run -d hw/focmini -e esp32dev_as5600
+# Build the sensorless diagnostic from motor_test.cpp using the same env.
+FOCMINI_PROGRAM=motor_test ./.venv/bin/pio run -d hw/focmini -e esp32dev_as5600
+
+# Existing non-FOC firmware build if needed (still from main.cpp).
+FOCMINI_PROGRAM=main ./.venv/bin/pio run -d hw/focmini -e esp32dev_open_loop
+
+# ACS724 readings only: no encoder, driver initialization, or motor output.
+./.venv/bin/pio run -d hw/focmini -e esp32dev_acs724_monitor
 
 # Native ESP-IDF profile. Kconfig defaults leave it disarmed.
 ./.venv/bin/pio run -d hw/focmini/idf -e esp32dev_idf -t menuconfig
@@ -146,12 +147,12 @@ source hashes, and host regression evidence are recorded under ignored
 `results/`. No upload or physical motor test is implied by a successful build.
 
 After reviewing the wiring/configuration and building, the operator can upload
-the first-spin Arduino profile. Keep the motor supply disconnected during USB
-upload. The detected CP2102N port for this board is
+an Arduino program. Keep the motor supply disconnected during USB upload. The
+detected CP2102N port for this board is
 `/dev/cu.usbserial-3120` (the port can change):
 
 ```bash
-./.venv/bin/pio run -d hw/focmini -e esp32dev_open_loop -t upload \
+FOCMINI_PROGRAM=main ./.venv/bin/pio run -d hw/focmini -e esp32dev_as5600 -t upload \
   --upload-port /dev/cu.usbserial-3120
 ./.venv/bin/pio device monitor -d hw/focmini -b 115200 \
   --port /dev/cu.usbserial-3120
@@ -166,6 +167,51 @@ commands cannot clear a FAULT latch. Once READY appears, enter `ARM`, `T1`, then
 `STOP` as complete lines. The port shown is the user-confirmed CP2102N adapter
 connected to ESP32-D0WD-V3, 4 MB flash; it can change when the adapter is moved.
 
+## Standalone sensorless motor diagnostic
+
+`src/motor_test.cpp` is a separate, intentionally simple open-loop diagnostic;
+it contains no AS5600 or ACS724 objects. It uses the same DRI0058 pin map and
+FAULT interlock as the FOC firmware, starts disarmed, and refuses to run if
+FAULT is active. The `run_motor.sh --program motor-test` path waits for
+`READY DISARMED MOTOR TEST`, aborts on startup FAULT, asks for a separate `y`
+confirmation, then sends `RUN10` and prints the serial output. The firmware
+limits the run to 10 seconds and disables EN automatically; `Ctrl-C` in the
+helper sends `STOP`. For manual operation, `RUN10` requests the same bounded
+run and `STOP` aborts it. The test has no current feedback and does not regulate
+actual speed under load; use it only with an unloaded, secured motor and a
+current-limited supply. A successful build does not establish that the DRI/motor
+wiring is fault-free.
+
+The helper can build, upload, and run the motor diagnostic in one invocation
+(the script asks for upload confirmation, then a distinct spin confirmation):
+
+```bash
+./hw/focmini/run_motor.sh --program motor-test --port /dev/ttyUSB0
+```
+
+The regular FOC path still only builds/uploads and opens the monitor; its
+control commands remain manual. Neither path bypasses the DRI FAULT interlock.
+
+Both source files are selectable within the existing `esp32dev_as5600`
+PlatformIO environment; no motor-test environment is added. The selector
+defaults to `main.cpp` and selects `motor_test.cpp` with `FOCMINI_PROGRAM`:
+
+```bash
+# FOC application
+FOCMINI_PROGRAM=main ./.venv/bin/pio run -d hw/focmini -e esp32dev_as5600
+
+# Standalone motor diagnostic; still the same PlatformIO environment
+FOCMINI_PROGRAM=motor_test ./.venv/bin/pio run -d hw/focmini -e esp32dev_as5600
+
+# Build, upload, and open monitor; RUN10 remains a manual serial command
+./hw/focmini/run_motor.sh --program motor-test --port /dev/ttyUSB1
+```
+
+The helper requires confirmation before upload, asks to keep motor supply off
+during flashing, and never sends `RUN10` automatically. After upload, power the
+driver with the motor unloaded and shaft clear. If the firmware does not report
+`READY DISARMED MOTOR TEST`, do not send `RUN10`; inspect the reported fault.
+
 On 2026-09-26, the Arduino build with a 1.00 V motor amplitude booted to
 `READY DISARMED OPEN LOOP` on the ESP32-D0WD-V3. With the user-reported 9 V
 driver supply and 0.5 A supply limit, a two-second `T1` command was acknowledged,
@@ -179,8 +225,8 @@ With the actuator attached, the user reported that a 10-second `T1` at 1.00 V
 twisted without smooth rotation, a 10-second `T0.2` stayed still, and a
 two-second `T1` at 1.50 V still twisted. The user also reports that the actuator
 moves freely when unpowered. Every run acknowledged `STOP` and reported no
-FAULT; these are operator motion observations, not encoder, position, or current
-measurements. Open-loop control does not sense whether the rotor follows its
+FAULT; these are operator motion observations, not independently verified
+encoder, position, or current measurements. Open-loop control does not sense whether the rotor follows its
 command under load. Preserve the individual run traces under
 [`results`](../../results/focmini-actuator-1500-test-20260926-cghl1iel).
 
@@ -192,11 +238,13 @@ Focused shared parser/interlock tests run on macOS without an ESP32 toolchain:
 
 ## AS5600 closed-loop mode
 
-The Arduino firmware already contains an optional AS5600 mode. It switches the
-motor controller from sensorless `velocity_openloop` to closed-loop `velocity`,
-links the I²C sensor, and delays FOC alignment until the explicit `ARM` command.
-The AS5600 profile compiled successfully on 2026-09-30; no AS5600 has been
-connected or physically tested by this change.
+The Arduino AS5600 profile uses closed-loop velocity control and SimpleFOC FOC
+current torque control with the two inline ACS724 readings. The current target
+is software-limited to 0.5 A. Startup sensor-offset calibration occurs while
+EN is low; phase/polarity alignment and AS5600 rotor alignment occur only after
+the explicit `ARM` command. The motor can twitch during calibration. The
+firmware builds, but this ACS724 FOC wiring/configuration has not been flashed
+or physically validated yet.
 
 With all motor power off, wire the AS5600 module to the original ESP32-WROOM:
 
@@ -223,6 +271,23 @@ your computer):
 ./.venv/bin/pio device monitor -d hw/focmini -b 115200 \
   --port /dev/ttyUSB0
 ```
+
+For repeated use, the helper script performs the AS5600 build, upload, and
+monitor launch. It selects the sole detected USB serial device automatically,
+or accepts an explicit port; it never sends motor commands automatically:
+
+```bash
+./hw/focmini/run_motor.sh
+./hw/focmini/run_motor.sh --port /dev/ttyUSB0
+./hw/focmini/run_motor.sh --profile open-loop --port /dev/ttyUSB0
+```
+
+The script asks before uploading and pauses after upload. Keep motor power off
+for upload; before continuing, verify wiring, use the current-limited supply,
+leave the motor unloaded, and clear the shaft. Opening the monitor resets the
+ESP32. Once `READY DISARMED` appears, type `ARM`, then `T1` for a low-speed
+command; type `STOP` to stop. Use `T0` as an alternate stop command. This helper
+does not automate `ARM` or target commands.
 
 Wait for `READY DISARMED AS5600`. Enter `ARM` to perform the sensor/rotor
 alignment; the motor may twitch during calibration. On success, the monitor
