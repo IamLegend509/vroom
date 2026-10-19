@@ -32,6 +32,74 @@ common GND. Do not connect OUT directly to ESP32. DRI CS1/CS2/CS3 are unused.
 AS5600: VCC -> ESP32 3V3; GND -> common GND; SDA -> GPIO21; SCL -> GPIO22; OUT
 is unused in I²C mode. Check that the module's I²C pull-ups go to 3.3 V.
 
+### Wiring diagram
+
+This is a logical wiring diagram, not a physical perfboard layout. Keep the
+motor-phase wiring insulated and do not route phase current through perfboard
+copper. The ESP32 is USB-powered here, matching the wiring instructions above.
+
+```mermaid
+flowchart LR
+  PSU["Bench supply"]
+  GND(("Common GND"))
+  BUCK["5 V buck converter"]
+  DRI["DRI0058 FOC driver"]
+  ESP["ESP32 DevKit"]
+  USB["USB power"]
+  A1["ACS724 #1 ±5 A"]
+  A2["ACS724 #2 ±5 A"]
+  MOTOR["2805 BLDC motor"]
+  ENC["AS5600"]
+
+  PSU -->|"+9 V"| DRI
+  PSU -->|"+9 V"| BUCK
+  BUCK -->|"5 V"| A1
+  BUCK -->|"5 V"| A2
+  USB --> ESP
+
+  PSU -->|"−"| GND
+  DRI ---|"GND"| GND
+  BUCK ---|"GND"| GND
+  ESP ---|"GND"| GND
+  A1 ---|"GND"| GND
+  A2 ---|"GND"| GND
+  ENC ---|"GND"| GND
+
+  ESP -->|"GPIO25 → N1"| DRI
+  ESP -->|"GPIO26 → N2"| DRI
+  ESP -->|"GPIO27 → N3"| DRI
+  ESP -->|"GPIO32 → EN"| DRI
+  ESP -->|"GPIO33 → RESET"| DRI
+  ESP -->|"GPIO14 → SLEEP"| DRI
+  DRI -->|"FAULT (active-low)"| FAULT["FAULT node"]
+  ESP3V3["ESP32 3V3"] -->|"10 kΩ pull-up"| FAULT
+  FAULT -->|"GPIO34"| ESP
+  DRI3V3["DRI 3.3 V output"] -.->|"leave unconnected; 10 mA max"| NC["NC"]
+
+  DRI -->|"M1"| A1
+  A1 -->|"IP+ → IP−"| U["Phase U"]
+  U --> MOTOR
+  DRI -->|"M2"| A2
+  A2 -->|"IP+ → IP−"| V["Phase V"]
+  V --> MOTOR
+  DRI -->|"M3 direct"| W["Phase W"]
+  W --> MOTOR
+
+  A1 -->|"OUT"| R1["10 kΩ series"]
+  R1 --> TAP1["ADC A tap"]
+  TAP1 -->|"GPIO35"| ESP
+  TAP1 -->|"18 kΩ"| GND
+  A2 -->|"OUT"| R3["10 kΩ series"]
+  R3 --> TAP2["ADC B tap"]
+  TAP2 -->|"GPIO36"| ESP
+  TAP2 -->|"18 kΩ"| GND
+
+  ESP3V3 -->|"3V3"| ENC
+  ESP -->|"GPIO21 ↔ SDA"| ENC
+  ESP -->|"GPIO22 ↔ SCL"| ENC
+  ENC -.->|"OUT unused in I²C mode"| NC
+```
+
 The firmware pin map targets the original ESP32-WROOM. Keep motor power off
 while wiring; use secure connections for motor phases, and verify the DRI header
 labels against your board revision. The DRI0058 VDD output is limited to 10 mA;
