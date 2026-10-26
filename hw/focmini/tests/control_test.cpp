@@ -1,6 +1,7 @@
 // Focused host regression tests for the shared line parser and startup interlock.
 // Run with ./hw/focmini/tests/run_control_tests.sh from the repository root.
 #include "../shared/focmini_control.h"
+#include "../shared/motor_test_command.h"
 
 #include <cmath>
 #include <cstdio>
@@ -97,6 +98,28 @@ void test_commands_need_complete_valid_lines() {
         "embedded control byte invalidates the line");
 }
 
+void test_motor_test_parser() {
+  using C = focmini::MotorTestCommand;
+  const std::string bad_lines[] = {
+      std::string(16, 'x') + "RUN10", std::string(64, 'x') + "RUN10",
+      std::string("RUN10\0junk", 10), "RUN10\b", "RUN10junk",
+      std::string("RUN10") + static_cast<char>(0xff)};
+  for (const auto &line : bad_lines) {
+    focmini::MotorTestParser parser;
+    for (char ch : line) {
+      check(parser.feed(ch) == C::kNone, "diagnostic waits for line terminator");
+    }
+    check(parser.feed('\r') == C::kInvalid, "reject whole malformed diagnostic line");
+    check(parser.feed('\n') == C::kNone, "diagnostic CRLF emits only one result");
+    for (char ch : std::string("stop")) parser.feed(ch);
+    check(parser.feed('\n') == C::kStop, "valid STOP works after malformed input");
+    for (char ch : std::string("run10")) parser.feed(ch);
+    check(parser.feed('\n') == C::kRun10, "valid lowercase RUN10 still works");
+  }
+  focmini::MotorTestParser parser;
+  check(parser.feed('\n') == C::kNone, "empty diagnostic line is ignored");
+}
+
 void test_interlock_gating_and_latched_failures() {
   focmini::MotionInterlock motion;
   check(!motion.arm(), "boot state rejects ARM before setup succeeds");
@@ -144,6 +167,7 @@ void test_interlock_gating_and_latched_failures() {
 }  // namespace
 
 int main() {
+  test_motor_test_parser();
   test_complete_commands_and_line_endings();
   test_commands_need_complete_valid_lines();
   test_interlock_gating_and_latched_failures();

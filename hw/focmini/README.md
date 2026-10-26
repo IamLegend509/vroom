@@ -304,6 +304,22 @@ Focused shared parser/interlock tests run on macOS without an ESP32 toolchain:
 ./hw/focmini/tests/run_control_tests.sh
 ```
 
+The diagnostic parser rejects an entire overlong or nonprintable command line
+through its CR/LF terminator, including embedded NUL bytes; a trailing `RUN10`
+cannot rescue an invalid line. Lowercase commands and CRLF remain supported.
+Host-only serial failure tests (requires the pinned `pyserial` dependency):
+
+```bash
+python3 -m unittest discover -s hw/focmini/tests -p 'test_*.py'
+```
+
+The serial helper attempts STOP on interruption, short writes, communication
+errors, or completion timeout after a motion request. It terminates a possibly
+partial command before sending STOP and waits up to 2 seconds for the firmware's
+STOP acknowledgment (serial reads have a 0.25 second timeout). Failed writes or
+missing acknowledgment are reported as unconfirmed stops; the operator must
+verify EN is low. These host tests do not validate physical shutdown behavior.
+
 ## AS5600 closed-loop mode
 
 The Arduino AS5600 profile uses closed-loop velocity control and SimpleFOC FOC

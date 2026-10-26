@@ -5,6 +5,8 @@
 #include <Arduino.h>
 #include <SimpleFOC.h>
 
+#include "../shared/motor_test_command.h"
+
 #include "driver/gpio.h"
 #include "esp_intr_alloc.h"
 #include "freertos/FreeRTOS.h"
@@ -37,8 +39,7 @@ bool ready = false;
 bool running = false;
 bool fault_reported = false;
 uint32_t run_started_ms = 0;
-char command_line[16] = {};
-size_t command_length = 0;
+focmini::MotorTestParser command_parser;
 
 void IRAM_ATTR cut_external_gate_from_isr() {
   REG_WRITE(GPIO_OUT1_W1TC_REG, 1U << (kEnable - 32));
@@ -145,38 +146,23 @@ void start_run10() {
   Serial.println("RUN10 started: 1 rad/s open loop for at most 10 s; STOP to abort.");
 }
 
-void process_command() {
-  command_line[command_length] = '\0';
-  if (command_length == 0) return;
-  for (size_t i = 0; i < command_length; ++i) {
-    if (command_line[i] >= 'a' && command_line[i] <= 'z') {
-      command_line[i] = static_cast<char>(command_line[i] - 'a' + 'A');
-    }
-  }
-  if (strcmp(command_line, "RUN10") == 0) {
-    start_run10();
-  } else if (strcmp(command_line, "STOP") == 0) {
-    stop_run("STOP received: EN low.");
-  } else {
-    Serial.println("Unknown command; use RUN10 or STOP.");
-  }
-}
-
 void read_serial_commands() {
   unsigned int bytes_read = 0;
   while (Serial.available() > 0 && bytes_read < 32) {
     const char ch = static_cast<char>(Serial.read());
     ++bytes_read;
-    if (ch == '\r' || ch == '\n') {
-      process_command();
-      command_length = 0;
-      continue;
-    }
-    if (command_length + 1 < sizeof(command_line)) {
-      command_line[command_length++] = ch;
-    } else {
-      command_length = 0;
-      Serial.println("Command too long; use RUN10 or STOP.");
+    switch (command_parser.feed(ch)) {
+      case focmini::MotorTestCommand::kRun10:
+        start_run10();
+        break;
+      case focmini::MotorTestCommand::kStop:
+        stop_run("STOP received: EN low.");
+        break;
+      case focmini::MotorTestCommand::kInvalid:
+        Serial.println("Invalid command; use RUN10 or STOP.");
+        break;
+      case focmini::MotorTestCommand::kNone:
+        break;
     }
   }
 }
