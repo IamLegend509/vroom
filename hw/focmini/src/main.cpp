@@ -9,7 +9,9 @@
 // Assumptions: DRI0058, measured 9 V supply, verified 7 pole pairs, original
 // ESP32-WROOM GPIO map below, unloaded motor, and two ACS724-05AB inline current
 // sensors with 10k/18k output dividers. AS5600 mode uses FOC current control;
-// current limit is 0.5 A. Repro:
+// current limit is 0.5 A in the two-channel profile only. The explicit
+// single-current-monitor profile uses voltage control and GPIO35 telemetry;
+// it has no current regulation. Repro:
 // `pio run -d hw/focmini -e esp32dev_open_loop` (AS5600: esp32dev_as5600).
 
 #include <Arduino.h>
@@ -37,7 +39,13 @@
 #ifndef FOCMINI_USE_ACS724
 #define FOCMINI_USE_ACS724 0
 #endif
-#if FOCMINI_USE_AS5600 && !FOCMINI_USE_ACS724
+#ifndef FOCMINI_SINGLE_CURRENT_MONITOR
+#define FOCMINI_SINGLE_CURRENT_MONITOR 0
+#endif
+#if FOCMINI_SINGLE_CURRENT_MONITOR && (!FOCMINI_USE_AS5600 || FOCMINI_USE_ACS724 || FOCMINI_ACS724_MONITOR_ONLY)
+#error "Single-channel telemetry requires AS5600 voltage mode without two-channel current control"
+#endif
+#if FOCMINI_USE_AS5600 && !FOCMINI_USE_ACS724 && !FOCMINI_SINGLE_CURRENT_MONITOR
 #error "AS5600 FOC-current mode requires the two ACS724 phase-current channels"
 #endif
 #if FOCMINI_USE_AS5600
@@ -259,6 +267,16 @@ void print_telemetry() {
   Serial.print(phase_current.b, 3);
   Serial.print(",phaseC_current_A_inferred=");
   Serial.print(phase_current.c, 3);
+#elif FOCMINI_SINGLE_CURRENT_MONITOR
+  // One instantaneous sample for telemetry only. No delay/averaging in the
+  // active loop; GPIO36 is absent and neither phase B nor C is inferred.
+  const float adc_mV = analogReadMilliVolts(kPhaseCurrentPinA);
+  Serial.print(",phaseA_adc_mV=");
+  Serial.print(adc_mV, 1);
+  Serial.print(",phaseA_current_A=");
+  Serial.print((adc_mV - current_zero_a_mV) /
+               kAcs72405AbEsp32SensitivityMilliVPerA, 3);
+  Serial.print(",current_control=OFF");
 #else
   Serial.print(",phase_currents_A=NA");
 #endif
@@ -401,6 +419,17 @@ void setup() {
     return;
   }
   motor.linkDriver(&driver);
+#if FOCMINI_SINGLE_CURRENT_MONITOR
+  // EN is low: capture the zero-current offset once at boot. Assumes the
+  // ACS724-05AB and 10k/18k divider documented in README; units are mV.
+  analogReadResolution(12);
+  analogSetPinAttenuation(kPhaseCurrentPinA, ADC_11db);
+  delay(100);
+  current_zero_a_mV = average_adc_millivolts(kPhaseCurrentPinA);
+  Serial.print("SINGLE_CURRENT_MONITOR: GPIO35 zero_mV=");
+  Serial.println(current_zero_a_mV, 1);
+  Serial.println("AS5600 VOLTAGE CONTROL: current telemetry only; no current regulation.");
+#endif
 #if FOCMINI_USE_ACS724
   current_sense.linkDriver(&driver);
   if (!current_sense.init()) {
@@ -412,8 +441,17 @@ void setup() {
 #endif
 #if FOCMINI_USE_AS5600
   motor.controller = MotionControlType::velocity;
+#if FOCMINI_USE_ACS724
   motor.torque_controller = TorqueControlType::foc_current;
   motor.current_limit = kMotorCurrentLimitA;
+#else
+  motor.torque_controller = TorqueControlType::voltage;
+  // Initial voltage-mode gains match the existing native IDF profile.
+  // P: V/(rad/s), I: V/rad, filter time constant: seconds; not tuned here.
+  motor.PID_velocity.P = 0.2f;
+  motor.PID_velocity.I = 2.0f;
+  motor.LPF_velocity.Tf = 0.05f;
+#endif
 #else
   motor.controller = MotionControlType::velocity_openloop;
   motor.torque_controller = TorqueControlType::voltage;

@@ -1,0 +1,28 @@
+{
+  "version": "focmini-arty-xadc-calibration-v1",
+  "status": "unmeasured",
+  "valid": false,
+  "board_identity": null,
+  "wiring_identity": null,
+  "adc": {
+    "device": "Artix-7 XADC via Arty A0/A1 board network",
+    "channels": [4, 5],
+    "configuration_hash": null,
+    "current_u": {"zero_count":null,"signed_counts_per_amp":null,"noise_stddev_count":null},
+    "current_v": {"zero_count":null,"signed_counts_per_amp":null,"noise_stddev_count":null},
+    "phase_mapping_verified": false
+  },
+  "encoder": {
+    "device": "AS5600 via I2C",
+    "direction": null,
+    "electrical_zero_turns_q16": null,
+    "alignment_repeatability_turns": null,
+    "magnet_status_valid": false
+  },
+  "pole_pairs": 7,
+  "initial_alignment_voltage_v": 0.3,
+  "alignment_timeout_s": null,
+  "phase_trip_a": null,
+  "measurement_reference": null,
+  "checksum": null
+}

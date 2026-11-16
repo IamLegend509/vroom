@@ -1,0 +1,170 @@
+{
+  "board": "Digilent Arty A7-35 Rev D/E",
+  "part": "xc7a35ticsg324-1L",
+  "physical_revision_confirmation": "A7-35T detected by JTAG; board revision not yet confirmed",
+  "status": "assigned interface; physical sensor/command top pending",
+  "source_url": "https://raw.githubusercontent.com/Digilent/digilent-xdc/master/Arty-A7-35-Master.xdc",
+  "source_sha256": "3884f49d657924e2903e7cc275ee6d4acc6e5b17a55b818ed742fc59a0818492",
+  "pins": [
+    {
+      "port": "clk",
+      "direction": "input",
+      "pin": "E3",
+      "connector": "100MHz oscillator",
+      "master_port": "CLK100MHZ"
+    },
+    {
+      "port": "reset_button",
+      "direction": "input",
+      "pin": "D9",
+      "connector": "BTN0",
+      "master_port": "btn[0]"
+    },
+    {
+      "port": "pwm_a",
+      "direction": "output",
+      "pin": "G13",
+      "connector": "JA1",
+      "connect": "DRI IN1/N1",
+      "master_port": "ja[0]"
+    },
+    {
+      "port": "pwm_b",
+      "direction": "output",
+      "pin": "B11",
+      "connector": "JA2",
+      "connect": "DRI IN2/N2",
+      "master_port": "ja[1]"
+    },
+    {
+      "port": "pwm_c",
+      "direction": "output",
+      "pin": "A11",
+      "connector": "JA3",
+      "connect": "DRI IN3/N3",
+      "master_port": "ja[2]"
+    },
+    {
+      "port": "enable",
+      "direction": "output",
+      "pin": "D12",
+      "connector": "JA4",
+      "connect": "DRI EN; no added resistor in reported harness; verify startup",
+      "master_port": "ja[3]"
+    },
+    {
+      "port": "reset_n",
+      "direction": "output",
+      "pin": "D13",
+      "connector": "JA7",
+      "connect": "DRI RESET",
+      "master_port": "ja[4]"
+    },
+    {
+      "port": "sleep_n",
+      "direction": "output",
+      "pin": "B18",
+      "connector": "JA8",
+      "connect": "DRI SLEEP; onboard 10k pull-up, no added pull-down",
+      "master_port": "ja[5]"
+    },
+    {
+      "port": "fault_n",
+      "direction": "input",
+      "pin": "A18",
+      "connector": "JA9",
+      "connect": "DRI FAULT; onboard 10k pull-up to driver 3.3V",
+      "master_port": "ja[6]"
+    },
+    {
+      "port": "as5600_scl",
+      "direction": "inout",
+      "pin": "E15",
+      "connector": "JB1",
+      "connect": "AS5600 SCL; open drain, 3.3V pullup",
+      "master_port": "jb[0]"
+    },
+    {
+      "port": "as5600_sda",
+      "direction": "inout",
+      "pin": "E16",
+      "connector": "JB2",
+      "connect": "AS5600 SDA; open drain, 3.3V pullup",
+      "master_port": "jb[1]"
+    },
+    {
+      "port": "vaux4_p",
+      "direction": "input",
+      "pin": "C6",
+      "connector": "A0 analog path positive",
+      "connect": "ACS724 U divided output to header A0",
+      "master_port": "vaux4_p"
+    },
+    {
+      "port": "vaux4_n",
+      "direction": "input",
+      "pin": "C5",
+      "connector": "A0 analog path negative",
+      "connect": "onboard reference path; not a second user signal",
+      "master_port": "vaux4_n"
+    },
+    {
+      "port": "vaux5_p",
+      "direction": "input",
+      "pin": "A6",
+      "connector": "A1 analog path positive",
+      "connect": "ACS724 V divided output to header A1",
+      "master_port": "vaux5_p"
+    },
+    {
+      "port": "vaux5_n",
+      "direction": "input",
+      "pin": "A5",
+      "connector": "A1 analog path negative",
+      "connect": "onboard reference path; not a second user signal",
+      "master_port": "vaux5_n"
+    },
+    {
+      "port": "uart_rx",
+      "direction": "input",
+      "pin": "A9",
+      "connector": "onboard USB UART RX into FPGA",
+      "master_port": "uart_txd_in"
+    },
+    {
+      "port": "uart_tx",
+      "direction": "output",
+      "pin": "D10",
+      "connector": "onboard USB UART TX from FPGA",
+      "master_port": "uart_rxd_out"
+    },
+    {
+      "port": "led[0]",
+      "direction": "output",
+      "pin": "H5",
+      "connector": "LED0 / physical LD4",
+      "master_port": "led[0]"
+    },
+    {
+      "port": "led[1]",
+      "direction": "output",
+      "pin": "J5",
+      "connector": "LED1 / physical LD5",
+      "master_port": "led[1]"
+    },
+    {
+      "port": "led[2]",
+      "direction": "output",
+      "pin": "T9",
+      "connector": "LED2 / physical LD6",
+      "master_port": "led[2]"
+    },
+    {
+      "port": "led[3]",
+      "direction": "output",
+      "pin": "T10",
+      "connector": "LED3 / physical LD7",
+      "master_port": "led[3]"
+    }
+  ]
+}

@@ -385,6 +385,37 @@ The native ESP-IDF app has the same optional mode. In its menuconfig, enable
 `FOCMINI_USE_AS5600`; its default remains disabled. The Arduino and IDF sensor
 pins are both SDA GPIO 21 / SCL GPIO 22.
 
+## One ACS724 on GPIO35 with AS5600
+
+Use `esp32dev_as5600_single_current` for AS5600 closed-loop speed control
+with voltage torque control and one ACS724-05AB on phase U. Wire M1 through
+sensor IP+ / IP− to U, M2 directly to V, and M3 directly to W. Retain the
+GPIO35 10k/18k divider, regulated 5 V sensor power, common ground, and AS5600
+connections above. GPIO36 is unused. This profile has **no current regulation**;
+the two-channel profile's 0.5 A setting does not apply.
+
+At boot with EN low, 32 samples spaced 2 ms apart establish the GPIO35 zero
+level. Telemetry every 250 ms uses one instantaneous calibrated ADC reading:
+`phaseA_current_A = (adc_mV - zero_mV) / (400 * 18 / 28)`.
+This assumes the 05AB sensor's nominal 400 mV/A sensitivity and divider ratio;
+it is not RMS current, a current trip, or a calibrated accuracy claim. It does
+not infer other phase currents. Voltage amplitude is capped at 1.50 V, alignment
+at 0.30 V, and requested speed at ±5 rad/s. Initial voltage-loop P/I gains are
+0.2 V/(rad/s) and 2 V/rad with a 0.05 s velocity filter, matching the IDF profile;
+these gains have not been tuned or validated on this physical setup.
+
+Build and explicitly upload with the pinned PlatformIO environment:
+
+```bash
+FOCMINI_PROGRAM=main pio run -d hw/focmini -e esp32dev_as5600_single_current
+FOCMINI_PROGRAM=main pio run -d hw/focmini -e esp32dev_as5600_single_current -t upload --upload-port /dev/ttyUSB0
+```
+
+The board boots disarmed. `ARM` performs energized rotor alignment; after it
+reports armed, `T1` requests 1 rad/s and `STOP` disables EN. Uploading does not
+validate sensor wiring or controller performance. Use this explicit environment;
+`run_motor.sh` still selects the original profiles.
+
 ## References
 
 - [DFRobot DRI0058 specification and pinout](https://wiki.dfrobot.com/dri0058)
@@ -392,3 +423,21 @@ pins are both SDA GPIO 21 / SCL GPIO 22.
 - [TI DRV8313 control-signal sequencing guidance](https://e2e.ti.com/support/motor-drivers-group/motor-drivers/f/motor-drivers-forum/1008564/drv8313-switching-sequence-of-control-signals)
 - [SimpleFOC 3PWM driver contract](https://docs.simplefoc.com/bldcdriver3pwm)
 - [SimpleFOC 2.4.0 release](https://github.com/simplefoc/Arduino-FOC/releases)
+
+## Encoder-only diagnostic (motor supply disconnected)
+
+`FOCMINI_PROGRAM=encoder_test` selects a read-only AS5600 diagnostic. It holds
+EN, SLEEP and RESET low, creates no PWM outputs, and accepts no motion commands.
+USB powers the ESP32 and its 3.3 V AS5600 connection. At 10 Hz it reports I2C
+success, magnet detected/too weak/too strong flags, and raw angle converted to
+degrees (`raw * 360 / 4096`). An I2C failure produces no invented angle.
+Rotate the shaft manually to check response; 360-to-0 wrap is expected.
+Status bits follow ams AS5600 datasheet DS000365, STATUS register 0x0B.
+
+```bash
+FOCMINI_PROGRAM=encoder_test pio run -d hw/focmini -e esp32dev_as5600_single_current
+FOCMINI_PROGRAM=encoder_test pio run -d hw/focmini -e esp32dev_as5600_single_current -t upload --upload-port /dev/ttyUSB0
+```
+
+This replaces the motor firmware until `FOCMINI_PROGRAM=main` is explicitly
+built and uploaded again. No encoder configuration or OTP registers are written.

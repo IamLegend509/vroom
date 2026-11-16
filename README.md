@@ -11,16 +11,18 @@ All RL pipeline, motor registry, run viz live here.
 - `rl/experiments/` — capacity / reward / horizon study adapters.
 - `ui/` — clean run viewer: status + key metrics + 3 graphs. No motor animation.
 - `configs/motors/` — new motors go here as YAML (assumed sim params, not measured).
-- `hw/arty/` — placeholder only. No flashing/export/quant (out of scope).
+- `hw/arty/focmini/` — FPGA FOC baseline, direct sensor diagnostics and bounded
+  motor tests. See the [hardware handoff](hw/arty/focmini/HANDOFF.md) for current
+  build/bench status; accurate closed-loop motion is not commissioned.
 - `hw/focmini/` — ESP32 bring-up firmware for the DFRobot SimpleFOCmini
   (DRI0058), with PlatformIO and native ESP-IDF build paths. Kept separate from
   the simulation harness.
 
 ## Scope
 
-The simulation and RL harness remains simulation-only. `hw/focmini/` is an
-explicitly authorized hardware bring-up target; it does not change the RL
-pipeline. No model export or quantization is included.
+The simulation and RL harness remains simulation-only. `hw/focmini/` and
+`hw/arty/focmini/` are explicitly authorized motor-control targets; they do not
+change the RL pipeline. No model export or quantization is included.
 Final learning: from-scratch motor interaction, no PI demos/imitation/shadow PI.
 See `AGENTS.md`.
 
