@@ -29,10 +29,12 @@ module as5600_reader #(
         ACK_FALL=9, RESTART_LOW=10, RESTART_RISE=11, RESTART_HIGH=12,
         READ_LOW=13, READ_RISE=14, READ_HIGH=15, READ_FALL=16,
         MACK_LOW=17, MACK_RISE=18, MACK_HIGH=19, MACK_FALL=20,
-        STOP_LOW=21, STOP_RISE=22, STOP_HIGH=23, STOP_FREE=24;
+        STOP_LOW=21, STOP_RISE=22, STOP_HIGH=23, STOP_FREE=24,
+        RECOVER_LOW=25, RECOVER_HIGH=26;
     reg [4:0] state = IDLE;
     integer timer=0, watchdog=0;
     reg [2:0] bit_index=7;
+    reg [3:0] recover_count=0;
     reg [1:0] tx_index=0, rx_index=0;
     reg [7:0] tx_byte=0, rx_byte=0, pending_status=0, pending_high=0, pending_low=0;
     reg ack=0;
@@ -52,11 +54,20 @@ module as5600_reader #(
             else case(state)
                 IDLE: if (start) begin
                     ok<=0; error<=0; watchdog<=0;
-                    if (bus_level != 2'b11) begin done<=1; error<=1; end
-                    else begin
+                    if (bus_level == 2'b10) begin
+                        sda_low<=0; scl_low<=1; timer<=Q-1; recover_count<=0; state<=RECOVER_LOW;
+                    end else if (bus_level != 2'b11) begin
+                        done<=1; error<=1;
+                    end else begin
                         sda_low<=1; scl_low<=0; timer<=Q*2-1; state<=START_HOLD;
                         tx_index<=0; tx_byte<=8'h6c; bit_index<=7; rx_index<=0;
                     end
+                end
+                RECOVER_LOW: begin scl_low<=0; if (scl_sync[1]) begin timer<=Q*2-1; state<=RECOVER_HIGH; end end
+                RECOVER_HIGH: begin
+                    scl_low<=1; timer<=Q-1;
+                    if (recover_count==8) begin error<=1; state<=STOP_LOW; end
+                    else begin recover_count<=recover_count+1'b1; state<=RECOVER_LOW; end
                 end
                 START_HOLD: begin scl_low<=1; timer<=Q-1; state<=SEND_LOW; end
                 SEND_LOW: begin sda_low<=~tx_byte[bit_index]; timer<=Q-1; state<=SEND_RISE; end
