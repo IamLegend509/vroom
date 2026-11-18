@@ -61,7 +61,7 @@ try:
              '--vectors', meta['vectors']], 'quant.log')
     meta['quant'] = json.loads((run / 'quant_report.json').read_text()); save()
     command(['iverilog', '-V'], 'iverilog-version.log')
-    common = [s + 'rl_infer/rl_mlp.sv']
+    common = [s + 'rl_infer/rl_dual_mlp.sv']
     if not a.quick:
         command(['iverilog', '-g2012', '-s', 'tb_rl_mlp', '-o', 'tb_rl_mlp'] + common + [s + 'rl_infer/tb_rl_mlp.sv'], 'tb_rl_mlp_compile.log')
         command(['vvp', '-n', 'tb_rl_mlp'], 'tb_rl_mlp.log', 1800)

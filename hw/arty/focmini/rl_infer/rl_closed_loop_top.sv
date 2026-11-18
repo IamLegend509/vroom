@@ -17,7 +17,7 @@
 //     actor overrun trip, 500 ms UART keepalive timeout, and bounded 16 s run timer.
 module rl_closed_loop_top #(
   parameter int POLL_CYCLES = 20000,         // 5 kHz (200 us) AS5600 polling at 400 kHz I2C
-  parameter int TELEMETRY_CYCLES = 10000000, // 10 Hz UART telemetry
+  parameter int TELEMETRY_CYCLES = 2500000,  // 40 Hz UART telemetry
   parameter int I2C_CLK_HZ = 100000000,
   parameter int I2C_HZ = 400000,
   parameter int UART_DIV = 868,
@@ -26,7 +26,7 @@ module rl_closed_loop_top #(
   parameter int MS_CYCLES = 100000,          // 1 ms timer
   parameter int WAKE_CYCLES = 1000000,       // 10 ms DRV8313 wake/reset
   parameter int ENC_TIMEOUT = 10000000,      // 100 ms encoder timeout
-  parameter int KEEPALIVE_CYCLES = 50000000, // 500 ms host keepalive
+  parameter int KEEPALIVE_CYCLES = 200000000,// 2.0 s host keepalive
   parameter int ARM_CYCLES = 500000000       // 5 s arm expiry
 ) (
   input  wire clk,
@@ -104,13 +104,17 @@ module rl_closed_loop_top #(
   wire [7:0] rx_data;
   wire rx_valid, rx_error, arm, sweep, stop, ping, command_reject;
   wire [15:0] accepted;
+  wire cmd_target_valid, rl_mode;
+  wire [11:0] cmd_target;
+  wire [7:0] cmd_slew;
   sweep_uart_rx #(.DIV(UART_DIV)) rx (
     .clk(clk), .rst(rst), .rx(uart_rx),
     .data(rx_data), .valid(rx_valid), .framing_error(rx_error)
   );
   position_commands commands (
     .clk(clk), .rst(rst), .valid(rx_valid), .framing_error(rx_error), .data(rx_data),
-    .arm(arm), .sweep(sweep), .stop(stop), .ping(ping), .rejected(command_reject), .accepted(accepted)
+    .arm(arm), .sweep(sweep), .stop(stop), .ping(ping), .rejected(command_reject), .accepted(accepted),
+    .cmd_target_valid(cmd_target_valid), .cmd_target(cmd_target), .cmd_slew(cmd_slew), .rl_mode(rl_mode)
   );
 
   // ---------------- State machine & Calibration / RL schedule ----------------
@@ -146,21 +150,14 @@ module rl_closed_loop_top #(
   assign sleep_n = (state != IDLE && state != FAULT) && !rst && !stop && !cut;
   assign reset_n = (state == SETTLE || monitor_fault) && !rst && !stop && !cut;
 
-  // Calibration registers:
-  //   0..499 ms   (stage 0): 50% duty (cal_n=0), average zero ADC sum
-  //   500..1999 ms(stage 1): hold d-axis vector at cal_e16=0, cal_n=3641 (1.0V / 4.5V * 16384),
-  //                          capture settled mechanical angle th0 -> cal_off
-  //   2000..15999 (stage 2..5): closed-loop RL speed control:
-  //     2..4 s  : ref = 0 rad/s
-  //     4..8 s  : ref = +5 rad/s  (+4551 in Q.14 of 18 rad/s)
-  //     8..10 s : ref = 0 rad/s
-  //     10..14 s: ref = -5 rad/s  (-4551 in Q.14 of 18 rad/s)
-  //     14..16 s: ref = 0 rad/s
-  wire [2:0] stage = (elapsed_ms < 2000) ? 3'd0 :
-                     (elapsed_ms < 4000) ? 3'd1 :
-                     (elapsed_ms < 8000) ? 3'd2 :
-                     (elapsed_ms < 10000) ? 3'd3 :
-                     (elapsed_ms < 14000) ? 3'd4 : 3'd5;
+  // Calibration & interactive closed-loop position/RL mode:
+  //   0..499 ms   : 50% duty (cal_n=0), average zero ADC sum
+  //   500..1999 ms: hold d-axis vector at cal_e16=0, cal_n=3641 (1.0V / 4.5V * 16384),
+  //                 capture settled mechanical angle th0 -> cal_off, latch active_target=th0
+  //   >=2000 ms   : interactive on-chip FPGA outer P position loop -> NN RL inner/outer actors
+  //                 stage h: cal_mode ? {2'b00, rl_mode} : (rl_mode ? 3'd4 [smoothed] : 3'd2 [raw])
+  wire [2:0] stage = (elapsed_ms < 2000) ? {2'b00, rl_mode} :
+                     (rl_mode ? 3'd4 : 3'd2);
   wire cal_mode = (elapsed_ms < 2000);
   wire signed [15:0] cal_n = (elapsed_ms < 500) ? 16'sd0 : 16'sd3641; // 1.0V vector for alignment
   wire [15:0] cal_e16 = 16'd0;
@@ -172,28 +169,86 @@ module rl_closed_loop_top #(
   reg calibrated = 1'b0;
   reg [3:0] passed = 4'd0;
 
-  // Speed filter from AS5600 polls (5 kHz -> SPEED_PER_COUNT = 699 in Q.14 of 18 rad/s)
+  // Speed estimator from 5 kHz AS5600 polls over a 16-poll (3.2 ms) window:
+  //   1 count / 3.2 ms = 0.479 rad/s = 436 in Q.14 of 18 rad/s (vs 6981 at 200 us).
+  //   Reduces 1-LSB AS5600 encoder noise amplification by 16x while keeping 5 kHz angle latency.
   reg [11:0] last_enc_th = 0;
-  reg signed [31:0] w_f = 0;
-  wire signed [12:0] raw_diff = {1'b0, enc_angle} - {1'b0, last_enc_th};
-  wire signed [11:0] dth = raw_diff[11:0]; // signed 12-bit wrapped difference (-2048..+2047)
-  wire signed [31:0] dir_dth = cal_dir_neg ? -{{20{dth[11]}}, dth} : {{20{dth[11]}}, dth};
-  wire signed [31:0] w_inst = dir_dth * 32'sd699;
+  reg [11:0] enc_hist [0:15];
+  reg [3:0]  enc_ptr = 0;
+  reg [4:0]  enc_fill = 0;
+  reg signed [11:0] dth_r = 0;
+  reg dth_valid = 0, w_inst_valid = 0;
+  reg signed [31:0] w_inst_r = 0, w_f = 0;
+  wire signed [12:0] step_diff = {1'b0, enc_angle} - {1'b0, last_enc_th};
+  wire signed [11:0] dth_step  = step_diff[11:0];
+  wire signed [12:0] win_diff  = {1'b0, enc_angle} - {1'b0, enc_hist[enc_ptr]};
+  wire signed [11:0] dth16     = win_diff[11:0];
+  wire signed [12:0] dir_dth   = cal_dir_neg ? -{{1{dth_r[11]}}, dth_r} : {{1{dth_r[11]}}, dth_r};
 
   always @(posedge clk) begin
+    dth_valid <= 1'b0;
+    w_inst_valid <= 1'b0;
     if (rst || state != RUN) begin
-      w_f <= 0;
+      w_f <= 0; w_inst_r <= 0; dth_r <= 0; enc_ptr <= 0; enc_fill <= 0;
       if (enc_done && frame_good) last_enc_th <= enc_angle;
-    end else if (enc_done && frame_good) begin
-      last_enc_th <= enc_angle;
-      // Only update speed if |dth| <= 64 counts per poll (rejects any single-sample glitch)
-      if (dth <= 12'sd64 && dth >= -12'sd64)
-        w_f <= w_f + ((w_inst - w_f) >>> 4);
+    end else begin
+      if (enc_done && frame_good) begin
+        last_enc_th <= enc_angle;
+        enc_hist[enc_ptr] <= enc_angle;
+        enc_ptr <= enc_ptr + 4'd1;
+        if (enc_fill < 5'd16) enc_fill <= enc_fill + 5'd1;
+        // Reject single-sample I2C glitches and compute 16-poll window speed once primed.
+        if (enc_fill == 5'd16 && dth_step <= 12'sd64 && dth_step >= -12'sd64) begin
+          dth_r <= dth16;
+          dth_valid <= 1'b1;
+        end
+      end
+      if (dth_valid) begin
+        w_inst_r <= 32'($signed(dir_dth) * 15'sd436);
+        w_inst_valid <= 1'b1;
+      end
+      if (w_inst_valid)
+        w_f <= w_f + ((w_inst_r - w_f) >>> 2);
     end
   end
 
-  wire signed [31:0] ref_w = (stage == 3'd2) ? 32'sd4551 :
-                             (stage == 3'd4) ? -32'sd4551 : 32'sd0;
+  // ---------------- Outer FPGA position P-loop -> NN speed ref ----------------
+  // active_target tracks enc_angle until calibrated (t=1990 ms), then latches UART cmd_target.
+  // pos_err = signed wrapped (active_target - enc_angle). With cal_dir_neg=1, increasing enc_angle
+  // corresponds to w < 0, so ref_w = cal_dir_neg ? -kpos*peff : +kpos*peff (kpos = 20 Q.14/count),
+  // clamped to +/- w_lim (cmd_slew * 364 Q.14, ~0.4 rad/s per step). Pipelined for 100 MHz timing.
+  reg [11:0] active_target = 12'd0;
+  reg signed [11:0] pos_err = 12'sd0, pos_err_eff = 12'sd0;
+  reg signed [15:0] w_lim_r = 16'sd4368;
+  reg signed [17:0] raw_ref_w = 18'sd0;
+  reg signed [31:0] ref_w_r = 32'sd0;
+  wire signed [12:0] err_sub = {1'b0, active_target} - {1'b0, enc_angle};
+  wire signed [11:0] err_raw = err_sub[11:0];
+
+  always @(posedge clk) begin
+    if (rst || state != RUN || !calibrated) begin
+      active_target <= enc_angle;
+      pos_err <= 12'sd0;
+      pos_err_eff <= 12'sd0;
+      raw_ref_w <= 18'sd0;
+      ref_w_r <= 32'sd0;
+      w_lim_r <= 16'sd4368;
+    end else begin
+      if (cmd_target_valid) active_target <= cmd_target;
+      pos_err <= err_raw;
+      if (pos_err <= 12'sd2 && pos_err >= -12'sd2) pos_err_eff <= 12'sd0;
+      else if (pos_err > 12'sd2) pos_err_eff <= pos_err - 12'sd2;
+      else pos_err_eff <= pos_err + 12'sd2;
+      w_lim_r <= (cmd_slew == 8'd0) ? 16'sd364 :
+                 ((cmd_slew > 8'd45) ? 16'sd16380 : $signed({8'd0, cmd_slew}) * 16'sd364);
+      raw_ref_w <= cal_dir_neg ? -($signed(pos_err_eff) * 18'sd24) : ($signed(pos_err_eff) * 18'sd24);
+      if (raw_ref_w > $signed({{2{w_lim_r[15]}}, w_lim_r})) ref_w_r <= {{16{w_lim_r[15]}}, w_lim_r};
+      else if (raw_ref_w < -$signed({{2{w_lim_r[15]}}, w_lim_r})) ref_w_r <= -$signed({{16{w_lim_r[15]}}, w_lim_r});
+      else ref_w_r <= {{14{raw_ref_w[17]}}, raw_ref_w};
+    end
+  end
+
+  wire signed [31:0] ref_w = ref_w_r;
 
   // ---------------- 10 kHz tick & rl_ctrl instance ----------------
   reg [15:0] tick_cnt = 0;
@@ -201,6 +256,7 @@ module rl_closed_loop_top #(
   wire ctrl_busy, ctrl_done, ctrl_overrun;
   wire [12:0] duty_a, duty_b, duty_c;
   wire signed [31:0] dbg_ia, dbg_id, dbg_iq, dbg_iqref;
+  wire signed [15:0] dbg_nd, dbg_nq;
   wire [15:0] dbg_e16;
 
   rl_ctrl ctrl (
@@ -209,11 +265,12 @@ module rl_closed_loop_top #(
     .cal_dir_neg(cal_dir_neg), .cal_sign_neg(cal_sign_neg),
     .cal_off(cal_off), .cal_zero(cal_zero), .cal_gain(cal_gain), .cal_phase(2'd0),
     .cal_mode(cal_mode), .cal_e16(cal_e16), .cal_n(cal_n),
-    .init(ctrl_init), .init_ref(32'sd0),
+    .init(ctrl_init), .init_ref(32'sd0), .smooth_sh(rl_mode ? 3'd4 : 3'd0),
     .busy(ctrl_busy), .done(ctrl_done),
     .duty_a(duty_a), .duty_b(duty_b), .duty_c(duty_c),
     .overrun(ctrl_overrun),
-    .dbg_ia(dbg_ia), .dbg_id(dbg_id), .dbg_iq(dbg_iq), .dbg_iqref(dbg_iqref), .dbg_e16(dbg_e16)
+    .dbg_ia(dbg_ia), .dbg_id(dbg_id), .dbg_iq(dbg_iq), .dbg_iqref(dbg_iqref),
+    .dbg_nd(dbg_nd), .dbg_nq(dbg_nq), .dbg_e16(dbg_e16)
   );
 
   // ---------------- PWM generator ----------------
@@ -261,9 +318,17 @@ module rl_closed_loop_top #(
       if (ping) keep_age <= 0;
 
       if (trip != 0) begin
-        state <= FAULT; result <= trip;
+        state <= FAULT; result <= trip; calibrated <= 0;
       end else if (state == FAULT) begin
-        if (arm || sweep) control_reject <= 1;
+        if (stop) begin
+          state <= IDLE; result <= 2; calibrated <= 0; passed <= 0;
+        end else if (arm) begin
+          if (sensors_good) begin
+            state <= WAKE; boot_age <= 0; result <= 0; passed <= 0; elapsed_ms <= 0; calibrated <= 0;
+          end else begin
+            control_reject <= 1; result <= 6;
+          end
+        end else if (sweep) control_reject <= 1;
       end else if (stop || (arm && state != IDLE)) begin
         state <= IDLE; result <= 2; calibrated <= 0;
       end else if (arm) begin
@@ -315,15 +380,9 @@ module rl_closed_loop_top #(
               cal_off <= (16'(enc_angle) * 16'd112);
               calibrated <= 1'b1;
               ctrl_init <= 1'b1;
-            end
-            if (elapsed_ms == 16'd3999) passed[0] <= 1'b1;
-            if (elapsed_ms == 16'd7999) passed[1] <= 1'b1;
-            if (elapsed_ms == 16'd13999) passed[2] <= 1'b1;
-            if (elapsed_ms == 16'd15999) begin
-              elapsed_ms <= 16'd16000;
               passed <= 4'hf;
-              state <= IDLE; result <= 1; calibrated <= 0;
-            end else elapsed_ms <= elapsed_ms + 1'b1;
+            end
+            if (elapsed_ms < 16'hfffe) elapsed_ms <= elapsed_ms + 1'b1;
           end else ms_counter <= ms_counter + 1'b1;
         end
         default: begin state <= FAULT; result <= 9; end
@@ -339,21 +398,27 @@ module rl_closed_loop_top #(
 
   assign led = {calibrated, last_enc_ok, fault_telemetry[1], heartbeat};
 
-  // ---------------- Telemetry (C3 114-byte format for seamless host compatibility) ----------------
-  //   d = speed reference (signed 12-bit: w_n >> 4)
-  //   z = measured speed  (signed 12-bit: w_f >> 4)
-  //   o = iq_ref          (signed 16-bit: dbg_iqref[15:0])
-  //   p = dbg_e16[15:8]
-  wire [11:0] tel_d = ref_w[15:4];
-  wire [11:0] tel_z = w_f[15:4];
-  wire [15:0] tel_o = dbg_iqref[15:0];
+  // ---------------- Telemetry (C3 138-byte format with on-chip RL actor outputs) ----------------
+  //   d  = active position target (12-bit counts)
+  //   z  = signed position error  (signed 12-bit counts: active_target - enc_angle)
+  //   o  = electrical phase       (dbg_e16)
+  //   p  = dbg_e16[15:8]
+  //   iq = outer actor iq_ref     (signed 16-bit Q.14)
+  //   vd = inner actor nd (out)   (signed 16-bit Q.14)
+  //   vq = inner actor nq (out)   (signed 16-bit Q.14)
+  wire [11:0] tel_d = active_target;
+  wire [11:0] tel_z = pos_err;
+  wire [15:0] tel_o = dbg_e16;
   wire [7:0]  tel_p = dbg_e16[15:8];
+  wire [15:0] tel_iq = dbg_iqref[15:0];
+  wire [15:0] tel_vd = dbg_nd;
+  wire [15:0] tel_vq = dbg_nq;
 
   function automatic [7:0] h(input [3:0] n);
     h = (n < 10) ? (8'h30 + {4'b0, n}) : (8'h41 + {4'b0, n} - 8'd10);
   endfunction
 
-  localparam integer LINE_LEN = 114;
+  localparam integer LINE_LEN = 138;
   reg [LINE_LEN*8-1:0] packet = 0;
   reg [2:0] send_state = 0;
   integer chars_left = 0;
@@ -379,7 +444,10 @@ module rl_closed_loop_top #(
           " d=", h(tel_d[11:8]), h(tel_d[7:4]), h(tel_d[3:0]),
           " z=", h(tel_z[11:8]), h(tel_z[7:4]), h(tel_z[3:0]),
           " o=", h(tel_o[15:12]), h(tel_o[11:8]), h(tel_o[7:4]), h(tel_o[3:0]),
-          " h=", h({1'b0, stage}), " k=", h({3'b0, calibrated}), " y=", h(passed), 8'h0d, 8'h0a};
+          " h=", h({1'b0, stage}), " k=", h({3'b0, calibrated}), " y=", h(passed),
+          " iq=", h(tel_iq[15:12]), h(tel_iq[11:8]), h(tel_iq[7:4]), h(tel_iq[3:0]),
+          " vd=", h(tel_vd[15:12]), h(tel_vd[11:8]), h(tel_vd[7:4]), h(tel_vd[3:0]),
+          " vq=", h(tel_vq[15:12]), h(tel_vq[11:8]), h(tel_vq[7:4]), h(tel_vq[3:0]), 8'h0d, 8'h0a};
         chars_left <= LINE_LEN; send_state <= 1;
       end
       1: begin tx_start <= 1; send_state <= 2; end

@@ -27,23 +27,24 @@ module rl_parity_top #(parameter integer DIV = 868) (
   wire [7:0] rx_data; wire rx_valid, rx_ferr;
   sweep_uart_rx #(.DIV(DIV)) rx (.clk(clk), .rst(rst), .rx(uart_rx), .data(rx_data), .valid(rx_valid), .framing_error(rx_ferr));
 
-  // ---------------- actors ----------------
-  logic iwe, owe, istart, ostart, ibusy, obusy, idone, odone;
+  // ---------------- shared dual actor ----------------
+  logic xwe, mstart, mbusy, mdone;
   logic [4:0] xaddr;
-  logic signed [15:0] xdata, iy0, iy1, oy0, oy1;
-  logic signed [24:0] iz0, iz1, oz0, oz1;
-  rl_mlp #(.NIN(25), .LANES(32), .W1B(16)) inner (.clk, .rst, .x_we(iwe), .x_addr(xaddr),
-    .x_data(xdata), .start(istart), .busy(ibusy), .done(idone), .y0(iy0), .y1(iy1), .z0(iz0), .z1(iz1));
-  rl_mlp #(.NIN(19), .LANES(16), .W1B(9),
-    .W0F("outer_w0.mem"), .W1F("outer_w1.mem"), .W2F("outer_w2.mem"),
-    .B0F("outer_bs0.mem"), .B1F("outer_bs1.mem"), .B2F("outer_bs2.mem")) outer (.clk, .rst,
-    .x_we(owe), .x_addr(xaddr), .x_data(xdata), .start(ostart), .busy(obusy), .done(odone),
-    .y0(oy0), .y1(oy1), .z0(oz0), .z1(oz1));
+  logic signed [15:0] xdata, ry0_w, ry1_w;
+  logic signed [24:0] rz0_w, rz1_w;
+  logic actor;
+  rl_dual_mlp actors (
+    .clk, .rst, .x_we(xwe), .x_actor(actor), .x_addr(xaddr), .x_data(xdata),
+    .start(mstart), .actor(actor),
+    .ext_th_we(1'b0), .ext_th_a(10'd0), .ext_th_b(10'd0),
+    .ext_t0(), .ext_t1(),
+    .busy(mbusy), .done(mdone),
+    .y0(ry0_w), .y1(ry1_w), .z0(rz0_w), .z1(rz1_w)
+  );
 
   // ---------------- frame receive / reply ----------------
   typedef enum logic [2:0] {HDR, ACT, LO, HI, CK, RUNNING, SEND} st_t;
   st_t st;
-  logic actor;
   logic [7:0] lo, x, txx;
   logic [4:0] nlast;
   logic [15:0] cycles;
@@ -53,15 +54,15 @@ module rl_parity_top #(parameter integer DIV = 868) (
   logic err_led, ok_led;
   diag_uart_tx #(.CLKS_PER_BIT(DIV)) tx (.clk(clk), .rst(rst), .start(tstart), .data(tdata), .busy(tbusy), .tx(uart_tx));
 
-  wire signed [15:0] ry0 = actor ? oy0 : iy0, ry1 = actor ? oy1 : iy1;
-  wire signed [31:0] rz0 = 32'(actor ? oz0 : iz0), rz1 = 32'(actor ? oz1 : iz1);
-  wire adone = actor ? odone : idone;
+  wire signed [15:0] ry0 = ry0_w, ry1 = ry1_w;
+  wire signed [31:0] rz0 = 32'(rz0_w), rz1 = 32'(rz1_w);
+  wire adone = mdone;
 
   always_ff @(posedge clk) begin
-    {iwe, owe, istart, ostart, tstart} <= '0;
-    if (iwe || owe) xaddr <= xaddr + 1'b1;               // after each x write
+    {xwe, mstart, tstart} <= '0;
+    if (xwe) xaddr <= xaddr + 1'b1;                       // after each x write
     if (rst) begin
-      st <= HDR; tlen <= 0; tidx <= 0; err_led <= 0; ok_led <= 0; xaddr <= 0;
+      st <= HDR; tlen <= 0; tidx <= 0; err_led <= 0; ok_led <= 0; xaddr <= 0; actor <= 0;
     end else case (st)
       HDR: if (rx_valid && rx_data == 8'hA5) begin x <= 8'hA5; st <= ACT; end
       ACT: if (rx_valid) begin
@@ -74,8 +75,7 @@ module rl_parity_top #(parameter integer DIV = 868) (
       end
       LO: if (rx_valid) begin lo <= rx_data; x <= x ^ rx_data; st <= HI; end
       HI: if (rx_valid) begin
-        x <= x ^ rx_data; xdata <= {rx_data, lo};
-        if (actor) owe <= 1; else iwe <= 1;
+        x <= x ^ rx_data; xdata <= {rx_data, lo}; xwe <= 1;
         if (xaddr == nlast) st <= CK; else st <= LO;
       end
       CK: if (rx_valid) begin
@@ -83,7 +83,7 @@ module rl_parity_top #(parameter integer DIV = 868) (
           tbuf[0] <= 8'hEE; tbuf[1] <= 8'h02; tlen <= 3; tidx <= 0; txx <= 0;
           err_led <= 1; st <= SEND;
         end else begin
-          if (actor) ostart <= 1; else istart <= 1;
+          mstart <= 1;
           cycles <= 0; st <= RUNNING;
         end
       end
@@ -112,5 +112,5 @@ module rl_parity_top #(parameter integer DIV = 868) (
 
   reg [26:0] hb = 0;
   always @(posedge clk) hb <= hb + 1'b1;
-  assign led = {ibusy | obusy, err_led, ok_led, hb[26]};
+  assign led = {mbusy, err_led, ok_led, hb[26]};
 endmodule

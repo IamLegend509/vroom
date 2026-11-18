@@ -7,7 +7,7 @@ if {[catch {
     foreach f [glob *.mem] {read_mem $f}
     read_verilog -sv [file join $fm position_loop uart_rx.sv]
     read_verilog -sv [file join $fm sensor_diag uart_tx.sv]
-    read_verilog -sv [file join $src rl_mlp.sv]
+    read_verilog -sv [file join $src rl_dual_mlp.sv]
     read_verilog -sv [file join $src rl_parity_top.sv]
     read_xdc [file join $src rl_parity.xdc]
     synth_design -top rl_parity_top -part xc7a35ticsg324-1L
@@ -15,6 +15,7 @@ if {[catch {
         if {[get_property PACKAGE_PIN $p] eq ""} {error "Unassigned pin $p"}
     }
     report_utilization -file synth_utilization.rpt
+    report_utilization -hierarchical -file synth_utilization_hier.rpt
     opt_design
     place_design
     phys_opt_design

@@ -3,232 +3,435 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VROOM // Arty A7-35T FPGA PMSM Control & RL Digital-Twin Lab</title>
+<title>Vroom — Arty A7-35T Motor Bench</title>
 <style>
   :root {
-    --bg: #050b14;
-    --panel: rgba(11, 22, 38, 0.90);
-    --border: rgba(56, 189, 248, 0.25);
-    --cyan: #38bdf8;
-    --gold: #fbbf24;
-    --emerald: #34d399;
-    --rose: #fb7185;
-    --violet: #a78bfa;
-    --text: #e2e8f0;
-    --muted: #94a3b8;
+    --earth: #513229;
+    --earth-soft: rgba(81, 50, 41, 0.72);
+    --earth-muted: rgba(81, 50, 41, 0.54);
+    --oat: #F4F1E2;
+    --oat-card: #FAF8EE;
+    --oat-well: #ECE7D2;
+    --sky: #D8EBF9;
+    --sky-ink: #2B5E7B;
+    --bay: #FCE6B7;
+    --bay-ink: #8C5C1C;
+    --vinnie: #D7D4B1;
+    --moss: #546442;
+    --terracotta: #9E4738;
+    --border: rgba(81, 50, 41, 0.16);
+    --border-strong: rgba(81, 50, 41, 0.34);
+    --serif: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+    --sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
   }
   * { box-sizing: border-box; user-select: none; }
   body {
-    margin: 0; font-family: "JetBrains Mono", -apple-system, BlinkMacSystemFont, "Segoe UI", monospace;
-    background: radial-gradient(circle at 50% 0%, #0f253e 0%, #040810 100%);
-    color: var(--text); height: 100vh; overflow: hidden;
-    display: flex; flex-direction: column; padding: 12px; gap: 10px;
+    margin: 0;
+    font-family: var(--sans);
+    background: var(--oat);
+    color: var(--earth);
+    height: 100vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    padding: 14px 16px;
+    gap: 12px;
   }
+
   header {
-    display: flex; justify-content: space-between; align-items: center;
-    background: var(--panel); border: 1px solid var(--border);
-    padding: 10px 16px; border-radius: 12px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: var(--oat-card);
+    border: 1px solid var(--border);
+    padding: 10px 18px;
+    border-radius: 12px;
+    gap: 16px;
   }
-  .title-block { display: flex; align-items: center; gap: 14px; }
-  .title-block h1 { margin: 0; font-size: 16px; letter-spacing: 0.5px; color: #f8fafc; }
-  .subtitle { font-size: 11px; color: var(--muted); }
-  .tabs { display: flex; gap: 8px; }
+  .title-block h1 {
+    margin: 0;
+    font-family: var(--serif);
+    font-weight: 500;
+    font-size: 23px;
+    letter-spacing: -0.02em;
+    line-height: 1.05;
+    color: var(--earth);
+  }
+  .subtitle {
+    margin-top: 3px;
+    font-size: 11px;
+    letter-spacing: 0.02em;
+    color: var(--earth-muted);
+  }
+
+  .tabs {
+    display: flex;
+    gap: 6px;
+    background: var(--oat-well);
+    padding: 4px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+  }
   .tab-btn {
-    background: rgba(255,255,255,0.04); border: 1px solid var(--border);
-    color: var(--text); padding: 8px 14px; border-radius: 8px; font-size: 12px;
-    font-weight: 600; cursor: pointer; transition: all 0.15s;
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--earth-soft);
+    padding: 7px 14px;
+    border-radius: 7px;
+    font-size: 12px;
+    font-weight: 500;
+    font-family: var(--sans);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
   }
+  .tab-btn:hover { color: var(--earth); }
   .tab-btn.active {
-    background: rgba(56, 189, 248, 0.2); border-color: var(--cyan); color: #fff;
-    box-shadow: 0 0 12px rgba(56, 189, 248, 0.25);
+    background: var(--oat-card);
+    border-color: var(--border-strong);
+    color: var(--earth);
+    font-weight: 600;
   }
+
   .status-pill {
-    display: flex; align-items: center; gap: 8px; font-size: 12px;
-    background: rgba(0,0,0,0.4); padding: 6px 12px; border-radius: 999px;
-    border: 1px solid rgba(255,255,255,0.1);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    font-family: var(--mono);
+    background: var(--oat);
+    padding: 7px 13px;
+    border-radius: 999px;
+    border: 1px solid var(--border-strong);
+    color: var(--earth);
+    white-space: nowrap;
   }
-  .dot { width: 9px; height: 9px; border-radius: 50%; background: #64748b; }
-  .dot.live { background: var(--emerald); box-shadow: 0 0 8px var(--emerald); }
-  .dot.fault { background: var(--rose); box-shadow: 0 0 8px var(--rose); }
+  .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--vinnie);
+    border: 1px solid var(--earth-muted);
+  }
+  .dot.live { background: var(--moss); border-color: var(--moss); }
+  .dot.fault { background: var(--terracotta); border-color: var(--terracotta); }
 
   .main-grid {
-    flex: 1; display: grid; grid-template-columns: 340px 1fr 370px; gap: 10px; min-height: 0;
+    flex: 1;
+    display: grid;
+    grid-template-columns: 332px 1fr 358px;
+    gap: 12px;
+    min-height: 0;
   }
   .card {
-    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
-    padding: 12px; display: flex; flex-direction: column; gap: 8px; position: relative; min-height: 0;
+    background: var(--oat-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 13px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+    position: relative;
+    min-height: 0;
   }
   .card-title {
-    font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px;
-    color: var(--cyan); display: flex; justify-content: space-between; align-items: center;
-    border-bottom: 1px solid rgba(255,255,255,0.07); padding-bottom: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--earth);
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 5px;
   }
-  .card-title span.sub { color: var(--muted); font-weight: 400; font-size: 10px; }
+  .card-title span.sub {
+    text-transform: none;
+    letter-spacing: 0;
+    color: var(--earth-muted);
+    font-weight: 400;
+    font-size: 11px;
+  }
 
-  .metrics-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
+  .metrics-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 7px; }
   .metric {
-    background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.06);
-    border-radius: 8px; padding: 6px 8px;
+    background: var(--oat);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 6px 9px;
   }
-  .metric .k { font-size: 10px; color: var(--muted); }
-  .metric .v { font-size: 16px; font-weight: 700; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .metric.warm { background: rgba(252, 230, 183, 0.42); }
+  .metric.cool { background: rgba(216, 235, 249, 0.48); }
+  .metric.sage { background: rgba(215, 212, 177, 0.34); }
+  .metric .k { font-size: 10px; color: var(--earth-muted); }
+  .metric .v {
+    font-family: var(--mono);
+    font-size: 15px;
+    font-weight: 600;
+    margin-top: 2px;
+    font-variant-numeric: tabular-nums;
+    color: var(--earth);
+  }
 
   .btn-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
   button.ctrl {
-    background: rgba(56, 189, 248, 0.1); border: 1px solid rgba(56, 189, 248, 0.3);
-    color: var(--text); padding: 7px 6px; border-radius: 7px; font-size: 11px;
-    font-weight: 600; cursor: pointer; font-family: inherit; transition: all 0.12s;
+    background: var(--oat);
+    border: 1px solid var(--border-strong);
+    color: var(--earth);
+    padding: 7px 6px;
+    border-radius: 7px;
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    font-family: var(--sans);
+    transition: background 0.12s, border-color 0.12s;
   }
-  button.ctrl:hover { background: rgba(56, 189, 248, 0.25); }
-  button.ctrl.emerald { background: rgba(52, 211, 153, 0.18); border-color: var(--emerald); color: #a7f3d0; }
-  button.ctrl.rose { background: rgba(251, 113, 133, 0.18); border-color: var(--rose); color: #fecdd3; }
-  button.ctrl.gold { background: rgba(251, 191, 36, 0.18); border-color: var(--gold); color: #fde68a; }
-  button.ctrl.violet { background: rgba(167, 139, 250, 0.2); border-color: var(--violet); color: #ddd6fe; }
+  button.ctrl:hover { background: var(--oat-well); }
+  button.ctrl.active-bay {
+    background: var(--bay);
+    border-color: var(--earth);
+    font-weight: 600;
+  }
+  button.ctrl.active-sky {
+    background: var(--sky);
+    border-color: var(--earth);
+    font-weight: 600;
+  }
+  button.ctrl.active-vinnie {
+    background: var(--vinnie);
+    border-color: var(--earth);
+    font-weight: 600;
+  }
+  button.ctrl.arm {
+    background: var(--vinnie);
+    border-color: var(--earth-soft);
+    font-weight: 600;
+  }
+  button.ctrl.arm:hover { background: #cbc89f; }
+  button.ctrl.stop {
+    background: #f2deda;
+    border-color: rgba(158, 71, 56, 0.48);
+    color: #6b251b;
+    font-weight: 600;
+  }
+  button.ctrl.stop:hover { background: #ead0ca; }
 
-  .center-col { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
-  .scope-box { flex: 1; display: flex; flex-direction: column; gap: 6px; min-height: 0; }
-  canvas.full { width: 100%; height: 100%; display: block; border-radius: 8px; background: rgba(2, 6, 14, 0.7); }
+  .center-col { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+  .scope-box { flex: 1; display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+  canvas.full {
+    width: 100%;
+    height: 100%;
+    display: block;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--oat);
+  }
+
+  .legend-inline { display: flex; gap: 12px; font-size: 11px; text-transform: none; letter-spacing: 0; font-weight: 500; }
+  .leg { display: inline-flex; align-items: center; gap: 5px; color: var(--earth-soft); }
+  .leg i { width: 10px; height: 3px; border-radius: 2px; display: inline-block; }
 
   .transient-bar {
-    display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
-    background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.08);
-    border-radius: 8px; padding: 6px 10px; font-size: 11px;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    background: var(--oat);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 7px 11px;
+    font-size: 11px;
   }
-  .transient-bar div span { color: var(--muted); display: block; font-size: 10px; }
-  .transient-bar div strong { color: var(--gold); font-size: 13px; }
+  .transient-bar div span { color: var(--earth-muted); display: block; font-size: 10px; }
+  .transient-bar div strong {
+    font-family: var(--mono);
+    color: var(--earth);
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+  }
 
-  .slider-row { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--muted); }
-  input[type=range] { flex: 1; accent-color: var(--cyan); }
+  .slider-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--earth-soft);
+  }
+  input[type=range] { flex: 1; accent-color: var(--earth); }
+
+  .duty-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    font-family: var(--mono);
+  }
+  .duty-track {
+    flex: 1;
+    height: 9px;
+    background: var(--oat-well);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    overflow: hidden;
+  }
+  .duty-fill { height: 100%; border-radius: 999px; }
+
+  .shadow-box {
+    font-size: 11px;
+    background: rgba(216, 235, 249, 0.42);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 9px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+  .shadow-row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .shadow-row span { color: var(--earth-soft); }
+  .shadow-row strong {
+    font-family: var(--mono);
+    color: var(--earth);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
 </style>
 </head>
 <body>
   <header>
     <div class="title-block">
-      <div>
-        <h1>⚡ VROOM // ARTY A7-35T PMSM CONTROL & RL DIGITAL-TWIN WORKBENCH</h1>
-        <div class="subtitle">XC7A35T-1L @ 100 MHz &nbsp;|&nbsp; 20 kHz 3-Phase SinePWM (DRI0058 / DRV8313) &nbsp;|&nbsp; AS5600 12-Bit I2C Encoder &nbsp;|&nbsp; XADC VAUX4 Current Sense</div>
-      </div>
+      <h1>Vroom Motor Bench</h1>
+      <div class="subtitle">Arty A7-35T &middot; DRI0058 20 kHz PWM &middot; AS5600 encoder &middot; 2805 PMSM</div>
     </div>
     <div class="tabs">
-      <button class="tab-btn active" id="tab-ee" onclick="setMode('ee')">🔬 EE Control Systems Lab</button>
-      <button class="tab-btn" id="tab-spring" onclick="setMode('spring')">🧲 Haptic Virtual Spring / Detents</button>
-      <button class="tab-btn" id="tab-ship" onclick="setMode('ship')">⛵ Naval Slalom Game</button>
+      <button class="tab-btn active" id="tab-ee" onclick="setMode('ee')">Bench Scope</button>
+      <button class="tab-btn" id="tab-spring" onclick="setMode('spring')">Detents</button>
+      <button class="tab-btn" id="tab-ship" onclick="setMode('ship')">Slalom</button>
     </div>
     <div class="status-pill">
       <span class="dot" id="status-dot"></span>
-      <span id="status-text">CONNECTING...</span>
+      <span id="status-text">Connecting...</span>
     </div>
   </header>
 
   <div class="main-grid">
-    <!-- LEFT COLUMN: FLYWHEEL / HELM + STEP GENERATOR + TELEMETRY -->
+    <!-- LEFT COLUMN: ROTOR DIAL + CONTROLS -->
     <div class="card">
       <div class="card-title">
-        <span>Interactive Rotor / Flywheel</span>
-        <span class="sub">Drag or Scroll</span>
+        <span>Rotor Dial</span>
+        <span class="sub">Drag or scroll</span>
       </div>
       <div style="display:flex;justify-content:center;align-items:center;padding:2px 0;">
-        <canvas id="wheel-canvas" width="240" height="240" style="cursor:grab;"></canvas>
+        <canvas id="wheel-canvas" width="228" height="228" style="cursor:grab;"></canvas>
       </div>
 
       <div class="metrics-grid">
-        <div class="metric">
-          <div class="k">Reference θ*</div>
-          <div class="v" id="m-cmd" style="color:var(--gold)">+0.00°</div>
+        <div class="metric warm">
+          <div class="k">Target</div>
+          <div class="v" id="m-cmd">+0.00&deg;</div>
+        </div>
+        <div class="metric cool">
+          <div class="k">Shaft</div>
+          <div class="v" id="m-act">+0.00&deg;</div>
+        </div>
+        <div class="metric sage">
+          <div class="k">Error</div>
+          <div class="v" id="m-err">+0.00&deg;</div>
         </div>
         <div class="metric">
-          <div class="k">Measured Shaft θm</div>
-          <div class="v" id="m-act" style="color:var(--cyan)">+0.00°</div>
-        </div>
-        <div class="metric">
-          <div class="k">Tracking Error eθ</div>
-          <div class="v" id="m-err" style="color:var(--emerald)">+0.00°</div>
-        </div>
-        <div class="metric">
-          <div class="k">Stator Field θe (7pp)</div>
-          <div class="v" id="m-ph" style="color:var(--violet)">0.0°</div>
+          <div class="k">Electrical phase</div>
+          <div class="v" id="m-ph">+0.0&deg;</div>
         </div>
       </div>
 
       <div class="slider-row">
-        <span>Slew Limit (ωmax):</span>
+        <span>Slew rate</span>
         <input type="range" id="slew-slider" min="1" max="28" value="14">
-        <span id="slew-label" style="color:var(--cyan);width:58px;text-align:right">123°/s</span>
+        <span id="slew-label" style="font-family:var(--mono);color:var(--earth);width:56px;text-align:right">123&deg;/s</span>
       </div>
 
       <div class="card-title" style="margin-top:2px;">
-        <span>Hardware Control Law (Live A/B Switch)</span>
-        <span class="sub" id="vamp-label">Dynamic 0.45V–1.50V</span>
+        <span>Drive Mode</span>
+        <span class="sub" id="vamp-label">Adaptive 0.45&ndash;1.15 V</span>
       </div>
       <div class="btn-grid" style="grid-template-columns:1fr 1fr;">
-        <button class="ctrl violet" id="btn-m1" onclick="setCtrlMode(true)" style="border-width:2px;">🧠 RL Policy Law (M1)</button>
-        <button class="ctrl" id="btn-m0" onclick="setCtrlMode(false)">⚙️ Classical Fixed-V (M0)</button>
+        <button class="ctrl active-bay" id="btn-m1" onclick="setCtrlMode(true)">Dynamic-V (M1)</button>
+        <button class="ctrl" id="btn-m0" onclick="setCtrlMode(false)">Fixed-V (M0)</button>
       </div>
       <div class="btn-grid" style="grid-template-columns:1fr 1fr;">
-        <button class="ctrl emerald" onclick="armMotor()">⚡ ARM & ENGAGE</button>
-        <button class="ctrl rose" onclick="stopMotor()">🛑 EMERGENCY STOP</button>
+        <button class="ctrl arm" onclick="armMotor()">Arm motor</button>
+        <button class="ctrl stop" onclick="stopMotor()">Stop</button>
       </div>
 
       <div class="card-title" style="margin-top:2px;">
-        <span>Function / Step Generator</span>
-        <span class="sub">Closed-Loop Input</span>
+        <span>Test Waveforms</span>
+        <span class="sub">Closed-loop step &amp; sweep</span>
       </div>
       <div class="btn-grid">
-        <button class="ctrl" onclick="triggerStep(-90)">Step -90°</button>
-        <button class="ctrl" onclick="triggerStep(-45)">Step -45°</button>
-        <button class="ctrl" onclick="triggerStep(0)">Origin 0°</button>
-        <button class="ctrl" onclick="triggerStep(45)">Step +45°</button>
+        <button class="ctrl" onclick="triggerStep(-90)">-90&deg;</button>
+        <button class="ctrl" onclick="triggerStep(-45)">-45&deg;</button>
+        <button class="ctrl" onclick="triggerStep(0)">0&deg;</button>
+        <button class="ctrl" onclick="triggerStep(45)">+45&deg;</button>
       </div>
       <div class="btn-grid">
-        <button class="ctrl" onclick="triggerStep(90)">Step +90°</button>
-        <button class="ctrl gold" onclick="setWave('square')">Square ±60°</button>
-        <button class="ctrl gold" onclick="setWave('sine')">Sine 0.25Hz</button>
-        <button class="ctrl violet" onclick="setWave('chirp')">Freq Chirp</button>
+        <button class="ctrl" onclick="triggerStep(90)">+90&deg;</button>
+        <button class="ctrl" id="wave-square" onclick="setWave('square')">Square</button>
+        <button class="ctrl" id="wave-sine" onclick="setWave('sine')">Sine</button>
+        <button class="ctrl" id="wave-chirp" onclick="setWave('chirp')">Chirp</button>
       </div>
     </div>
 
-    <!-- CENTER COLUMN: DUAL OSCILLOSCOPE OR SHIP CANVAS -->
+    <!-- CENTER COLUMN: SCOPE OR SLALOM -->
     <div class="center-col">
       <div class="card scope-box" id="ee-scope-card">
         <div class="card-title">
-          <span>CH1: Real-Time Mechanical Position Tracking — θ*(t) [Gold] vs. θm(t) [Cyan] &nbsp;&amp;&nbsp; Error e(t) [Emerald]</span>
-          <span class="sub">100 Hz AS5600 I2C Acquisition</span>
+          <span>Position</span>
+          <div class="legend-inline">
+            <span class="leg"><i style="background:#9C621E;"></i>Target</span>
+            <span class="leg"><i style="background:#2B5E7B;"></i>Shaft</span>
+            <span class="leg"><i style="background:#546442;"></i>Error</span>
+          </div>
+          <span class="sub">AS5600 @ 40 Hz</span>
         </div>
         <div style="flex:1.15;min-height:0;position:relative;">
           <canvas id="scope1" class="full"></canvas>
         </div>
 
         <div class="transient-bar">
-          <div><span>Last Step Command</span><strong id="tr-step">--</strong></div>
-          <div><span>10%–90% Rise Time</span><strong id="tr-rise">--</strong></div>
-          <div><span>Peak Overshoot</span><strong id="tr-over">--</strong></div>
-          <div><span>Steady-State Error</span><strong id="tr-sse">--</strong></div>
+          <div><span>Last step</span><strong id="tr-step">&mdash;</strong></div>
+          <div><span>Rise (10&ndash;90%)</span><strong id="tr-rise">&mdash;</strong></div>
+          <div><span>Overshoot</span><strong id="tr-over">&mdash;</strong></div>
+          <div><span>Steady error</span><strong id="tr-sse">&mdash;</strong></div>
         </div>
 
         <div class="card-title" style="margin-top:2px;">
-          <span>CH2: 3-Phase Inverter Duty Cycles (da, db, dc @ 20 kHz) &nbsp;&amp;&nbsp; Stator Electrical Angle</span>
-          <span class="sub">Centered SinePWM (Va, Vb, Vc)</span>
+          <span>Phase Voltages</span>
+          <div class="legend-inline">
+            <span class="leg"><i style="background:#2B5E7B;"></i>Va</span>
+            <span class="leg"><i style="background:#9C621E;"></i>Vb</span>
+            <span class="leg"><i style="background:#9E4738;"></i>Vc</span>
+          </div>
+          <span class="sub">20 kHz centered PWM</span>
         </div>
         <div style="flex:0.85;min-height:0;position:relative;">
           <canvas id="scope2" class="full"></canvas>
         </div>
       </div>
 
-      <!-- Hidden unless Naval Slalom tab is active -->
       <div class="card scope-box" id="ship-card" style="display:none;">
         <div class="card-title">
-          <span>⚓ Physical Motor-In-The-Loop Challenge — Steered by Live AS5600 Rotor Angle (θm)</span>
-          <div style="display:flex;gap:8px;align-items:center;">
-            <button class="ctrl emerald" onclick="startGame()" style="padding:3px 10px;">▶ NEW 60s RUN</button>
-            <button class="ctrl violet" id="auto-helmsman-btn" onclick="toggleHelmsman()" style="padding:3px 10px;">🤖 AI Auto-Helmsman: OFF</button>
+          <span>Harbor Slalom</span>
+          <span class="sub">Steered by live shaft angle</span>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <button class="ctrl active-vinnie" onclick="startGame()" style="padding:4px 10px;">New run</button>
+            <button class="ctrl" id="auto-helmsman-btn" onclick="toggleHelmsman()" style="padding:4px 10px;">Auto steer: off</button>
           </div>
         </div>
         <div class="transient-bar" style="grid-template-columns: repeat(5, 1fr);">
-          <div><span>Mission Timer</span><strong id="gm-time" style="color:var(--cyan)">60.0 s</strong></div>
-          <div><span>Hull Integrity</span><strong id="gm-hull" style="color:var(--emerald)">❤️❤️❤️ 100%</strong></div>
-          <div><span>Streak Multiplier</span><strong id="gm-combo" style="color:var(--violet)">1x</strong></div>
-          <div><span>Score</span><strong id="ship-score" style="color:var(--gold)">0</strong></div>
-          <div><span>High Score</span><strong id="gm-best" style="color:var(--gold)">0</strong></div>
+          <div><span>Time</span><strong id="gm-time">60.0 s</strong></div>
+          <div><span>Hull</span><strong id="gm-hull">3 / 3</strong></div>
+          <div><span>Streak</span><strong id="gm-combo">1x</strong></div>
+          <div><span>Score</span><strong id="ship-score">0</strong></div>
+          <div><span>Best</span><strong id="gm-best">0</strong></div>
         </div>
         <div style="flex:1;min-height:0;position:relative;">
           <canvas id="sea-canvas" class="full"></canvas>
@@ -236,70 +439,80 @@
       </div>
     </div>
 
-    <!-- RIGHT COLUMN: SPACE-VECTOR PHASOR + FPGA / RL ARCHITECTURE TELEMETRY -->
+    <!-- RIGHT COLUMN: STATOR VECTOR + DUTY + CPU RL SHADOW -->
     <div class="card">
       <div class="card-title">
-        <span>Clarke / Park α–β &amp; d–q Space Vector</span>
-        <span class="sub">7 Pole Pairs (2805)</span>
+        <span>Stator Vector</span>
+        <span class="sub">7 pole pairs</span>
       </div>
       <div style="display:flex;justify-content:center;align-items:center;">
-        <canvas id="phasor-canvas" width="230" height="230"></canvas>
+        <canvas id="phasor-canvas" width="224" height="224"></canvas>
       </div>
 
       <div class="card-title">
-        <span>3-Phase 20 kHz PWM Duty Bars (N=5000)</span>
-        <span class="sub">1.0 V Amplitude / 9.0 V Bus</span>
+        <span>Phase Duty</span>
+        <span class="sub">5000 counts @ 20 kHz</span>
       </div>
-      <div style="display:flex;flex-direction:column;gap:5px;font-size:11px;">
-        <div style="display:flex;align-items:center;gap:8px;">
-          <span style="width:52px;color:#38bdf8;">Phase A</span>
-          <div style="flex:1;height:10px;background:#0f172a;border-radius:5px;overflow:hidden;">
-            <div id="bar-a" style="width:50%;height:100%;background:#38bdf8;"></div>
-          </div>
-          <span id="txt-a" style="width:48px;text-align:right;">2500</span>
+      <div style="display:flex;flex-direction:column;gap:6px;">
+        <div class="duty-row">
+          <span style="width:52px;color:var(--sky-ink);">Phase A</span>
+          <div class="duty-track"><div id="bar-a" class="duty-fill" style="width:50%;background:#2B5E7B;"></div></div>
+          <span id="txt-a" style="width:44px;text-align:right;">2500</span>
         </div>
-        <div style="display:flex;align-items:center;gap:8px;">
-          <span style="width:52px;color:#fbbf24;">Phase B</span>
-          <div style="flex:1;height:10px;background:#0f172a;border-radius:5px;overflow:hidden;">
-            <div id="bar-b" style="width:50%;height:100%;background:#fbbf24;"></div>
-          </div>
-          <span id="txt-b" style="width:48px;text-align:right;">2500</span>
+        <div class="duty-row">
+          <span style="width:52px;color:var(--bay-ink);">Phase B</span>
+          <div class="duty-track"><div id="bar-b" class="duty-fill" style="width:50%;background:#9C621E;"></div></div>
+          <span id="txt-b" style="width:44px;text-align:right;">2500</span>
         </div>
-        <div style="display:flex;align-items:center;gap:8px;">
-          <span style="width:52px;color:#fb7185;">Phase C</span>
-          <div style="flex:1;height:10px;background:#0f172a;border-radius:5px;overflow:hidden;">
-            <div id="bar-c" style="width:50%;height:100%;background:#fb7185;"></div>
-          </div>
-          <span id="txt-c" style="width:48px;text-align:right;">2500</span>
+        <div class="duty-row">
+          <span style="width:52px;color:var(--terracotta);">Phase C</span>
+          <div class="duty-track"><div id="bar-c" class="duty-fill" style="width:50%;background:#9E4738;"></div></div>
+          <span id="txt-c" style="width:44px;text-align:right;">2500</span>
         </div>
       </div>
 
       <div class="card-title" style="margin-top:4px;">
-        <span>🧠 Cascaded RL Actor Digital-Twin Shadow</span>
-        <span class="sub">144,388 Params (Q.14)</span>
+        <span id="rl-card-title">RL Shadow (CPU)</span>
+        <span class="sub" id="rl-card-sub">144,388 params &middot; Q.14</span>
       </div>
-      <div style="font-size:11px;background:rgba(0,0,0,0.35);border:1px solid rgba(167,139,250,0.25);border-radius:8px;padding:8px;display:flex;flex-direction:column;gap:4px;">
-        <div style="display:flex;justify-content:space-between;">
-          <span style="color:var(--muted)">Outer Actor (19→256→256→2 @ 1kHz):</span>
-          <strong id="rl-iqref" style="color:var(--violet)">iq* = +0.000 A</strong>
+      <div class="shadow-box">
+        <div class="shadow-row">
+          <span>Outer actor (19&rarr;256&rarr;256&rarr;2)</span>
+          <strong id="rl-iqref">iq* = +0.000 A</strong>
         </div>
-        <div style="display:flex;justify-content:space-between;">
-          <span style="color:var(--muted)">Inner Actor (25→256→256→2 @ 10kHz):</span>
-          <strong id="rl-vdq" style="color:var(--cyan)">vd=0.00V, vq=0.00V</strong>
+        <div class="shadow-row">
+          <span>Inner actor (25&rarr;256&rarr;256&rarr;2)</span>
+          <strong id="rl-vdq">vd=0.00V vq=0.00V</strong>
         </div>
-        <div style="display:flex;justify-content:space-between;">
-          <span style="color:var(--muted)">FPGA Silicon Inference Latency:</span>
-          <strong style="color:var(--emerald)">25.4 µs (Inner) / 46.9 µs (Outer)</strong>
+        <div class="shadow-row">
+          <span>Silicon parity (P1)</span>
+          <strong>47.8 &mu;s / 46.8 &mu;s</strong>
         </div>
-        <div style="display:flex;justify-content:space-between;">
-          <span style="color:var(--muted)">XADC A0 Raw / DRV8313 nFAULT:</span>
-          <strong id="hw-health" style="color:var(--gold)">ADC=1185 | nFAULT=HIGH</strong>
+        <div class="shadow-row">
+          <span>Board health</span>
+          <strong id="hw-health">ADC=1185 &middot; nFAULT=1</strong>
         </div>
       </div>
     </div>
   </div>
 
 <script>
+const C = {
+  earth: '#513229',
+  earthSoft: 'rgba(81, 50, 41, 0.55)',
+  earthGrid: 'rgba(81, 50, 41, 0.11)',
+  earthAxis: 'rgba(81, 50, 41, 0.28)',
+  oat: '#F4F1E2',
+  oatWell: '#ECE7D2',
+  sky: '#D8EBF9',
+  skyInk: '#2B5E7B',
+  bay: '#FCE6B7',
+  bayInk: '#9C621E',
+  vinnie: '#D7D4B1',
+  moss: '#546442',
+  terracotta: '#9E4738'
+};
+
 let mode = 'ee';
 let waveMode = null;
 let cmdAngle = 0;
@@ -307,13 +520,10 @@ let wheelVel = 0;
 let dragging = false;
 let lastMouseAngle = 0;
 let lastSendTime = 0;
-let state = { m:0, g:0, r:0, d:0, z:0, o:0, a:1185, f:1, angle_deg:0, target_deg:0, error_deg:0, rl_iq:0, rl_vd:0, rl_vq:0 };
+let state = { m:0, g:0, r:0, d:0, z:0, o:0, a:1185, f:1, angle_deg:0, target_deg:0, error_deg:0, rl_iq:0, rl_vd:0, rl_vq:0, rl_mode:1 };
 
-// Oscilloscope history buffer (300 samples)
 const MAX_HIST = 260;
 const hist = [];
-
-// Step response analyzer
 let stepInfo = null;
 
 function setMode(m) {
@@ -327,7 +537,7 @@ function setMode(m) {
 
 function sendHelm(deg, slew) {
   cmdAngle = Math.max(-175, Math.min(175, deg));
-  document.getElementById('m-cmd').textContent = (cmdAngle>=0?'+':'') + cmdAngle.toFixed(2) + '°';
+  document.getElementById('m-cmd').textContent = (cmdAngle>=0?'+':'') + cmdAngle.toFixed(2) + '\u00B0';
   const now = performance.now();
   if (now - lastSendTime < 35 && slew === undefined) return;
   lastSendTime = now;
@@ -339,7 +549,7 @@ function sendHelm(deg, slew) {
 }
 
 function triggerStep(deg) {
-  waveMode = null;
+  setWave(null);
   const startAngle = state.angle_deg || 0;
   const delta = deg - startAngle;
   if (Math.abs(delta) > 5) {
@@ -347,33 +557,48 @@ function triggerStep(deg) {
       t0: performance.now(), start: startAngle, target: deg, delta: delta,
       t10: null, t90: null, peakErr: 0, done: false
     };
-    document.getElementById('tr-step').textContent = `${startAngle.toFixed(1)}° → ${deg.toFixed(1)}°`;
-    document.getElementById('tr-rise').textContent = 'Measuring...';
-    document.getElementById('tr-over').textContent = 'Measuring...';
+    document.getElementById('tr-step').textContent = `${startAngle.toFixed(1)}\u00B0 \u2192 ${deg.toFixed(1)}\u00B0`;
+    document.getElementById('tr-rise').textContent = '...';
+    document.getElementById('tr-over').textContent = '...';
   }
   sendHelm(deg, parseInt(document.getElementById('slew-slider').value));
 }
 
 function setWave(w) {
-  waveMode = (waveMode === w) ? null : w;
+  waveMode = (w && waveMode === w) ? null : w;
+  for (const k of ['square', 'sine', 'chirp']) {
+    document.getElementById('wave-' + k).className = (waveMode === k) ? 'ctrl active-sky' : 'ctrl';
+  }
+}
+
+function paintCtrlMode(rl) {
+  const onFpga = !!state.fpga_rl;
+  const b1 = document.getElementById('btn-m1');
+  const b0 = document.getElementById('btn-m0');
+  b1.className = rl ? 'ctrl active-bay' : 'ctrl';
+  b0.className = !rl ? 'ctrl active-sky' : 'ctrl';
+  b1.textContent = onFpga ? 'Smoothed NN (M1)' : 'Dynamic-V (M1)';
+  b0.textContent = onFpga ? 'Raw NN (M0)' : 'Fixed-V (M0)';
+  document.getElementById('vamp-label').textContent = onFpga
+    ? (rl ? '1.6 ms filter \u00B7 Smooth NN' : 'Direct 10 kHz DDPG')
+    : (rl ? 'Adaptive 0.45\u20131.15 V' : 'Fixed 0.92 V');
+  document.getElementById('rl-card-title').textContent = onFpga ? 'RL Actors (FPGA)' : 'RL Shadow (CPU)';
+  document.getElementById('rl-card-sub').textContent = onFpga ? 'On-chip 10 kHz / 1 kHz \u00B7 Q.14' : '144,388 params \u00B7 Q.14';
 }
 
 function setCtrlMode(rl) {
   fetch('/api/ctrl_mode', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({rl_mode: rl}) });
-  document.getElementById('btn-m1').className = rl ? 'ctrl violet' : 'ctrl';
-  document.getElementById('btn-m0').className = !rl ? 'ctrl gold' : 'ctrl';
-  document.getElementById('vamp-label').textContent = rl ? 'Dynamic 0.45V–1.50V' : 'Fixed 1.15V Constant';
+  paintCtrlMode(rl);
 }
 function armMotor() { fetch('/api/arm', { method: 'POST' }); }
-function stopMotor() { waveMode = null; fetch('/api/stop', { method: 'POST' }); }
+function stopMotor() { setWave(null); fetch('/api/stop', { method: 'POST' }); }
 
 document.getElementById('slew-slider').addEventListener('input', (e) => {
   const v = parseInt(e.target.value);
-  document.getElementById('slew-label').textContent = Math.round(v * 8.79) + '°/s';
+  document.getElementById('slew-label').textContent = Math.round(v * (state.fpga_rl ? 22.92 : 8.79)) + '\u00B0/s';
   sendHelm(cmdAngle, v);
 });
 
-// Wheel drag / scroll
 const wCanvas = document.getElementById('wheel-canvas');
 const wctx = wCanvas.getContext('2d');
 function mouseAngle(e) {
@@ -381,7 +606,7 @@ function mouseAngle(e) {
   return Math.atan2(e.clientY - (rect.top + rect.height/2), e.clientX - (rect.left + rect.width/2)) * 180 / Math.PI;
 }
 wCanvas.addEventListener('pointerdown', (e) => {
-  dragging = true; waveMode = null; lastMouseAngle = mouseAngle(e); wheelVel = 0;
+  dragging = true; setWave(null); lastMouseAngle = mouseAngle(e); wheelVel = 0;
   wCanvas.setPointerCapture(e.pointerId);
 });
 wCanvas.addEventListener('pointermove', (e) => {
@@ -391,32 +616,33 @@ wCanvas.addEventListener('pointermove', (e) => {
   if (d > 180) d -= 360; if (d < -180) d += 360;
   lastMouseAngle = a; wheelVel = d * 0.5;
   const sl = Math.max(2, Math.min(28, Math.round(Math.abs(d)*1.8 + 4)));
+  const kDegPerSlew = state.fpga_rl ? 22.92 : 8.79;
   document.getElementById('slew-slider').value = sl;
-  document.getElementById('slew-label').textContent = Math.round(sl * 8.79) + '°/s';
+  document.getElementById('slew-label').textContent = Math.round(sl * kDegPerSlew) + '\u00B0/s';
   sendHelm(cmdAngle + d, sl);
 });
 wCanvas.addEventListener('pointerup', () => { dragging = false; });
 wCanvas.addEventListener('wheel', (e) => {
-  e.preventDefault(); waveMode = null;
+  e.preventDefault(); setWave(null);
   const d = -e.deltaY * 0.18; wheelVel = d * 0.4;
   const sl = Math.max(3, Math.min(28, Math.round(Math.abs(d)*1.5 + 5)));
+  const kDegPerSlew = state.fpga_rl ? 22.92 : 8.79;
   document.getElementById('slew-slider').value = sl;
-  document.getElementById('slew-label').textContent = Math.round(sl * 8.79) + '°/s';
+  document.getElementById('slew-label').textContent = Math.round(sl * kDegPerSlew) + '\u00B0/s';
   sendHelm(cmdAngle + d, sl);
 }, { passive: false });
 
-// Telemetry polling (20 Hz)
 setInterval(async () => {
   try {
     const r = await fetch('/api/state');
     state = await r.json();
-    document.getElementById('m-act').textContent = (state.angle_deg>=0?'+':'') + state.angle_deg.toFixed(2) + '°';
-    document.getElementById('m-err').textContent = (state.error_deg>=0?'+':'') + state.error_deg.toFixed(2) + '°';
+    document.getElementById('m-act').textContent = (state.angle_deg>=0?'+':'') + state.angle_deg.toFixed(2) + '\u00B0';
+    document.getElementById('m-err').textContent = (state.error_deg>=0?'+':'') + state.error_deg.toFixed(2) + '\u00B0';
     const phDeg = (state.o * 360 / 65536);
-    document.getElementById('m-ph').textContent = (phDeg>=0?'+':'') + phDeg.toFixed(1) + '°';
-    document.getElementById('tr-sse').textContent = Math.abs(state.error_deg).toFixed(2) + '°';
+    document.getElementById('m-ph').textContent = (phDeg>=0?'+':'') + phDeg.toFixed(1) + '\u00B0';
+    document.getElementById('tr-sse').textContent = Math.abs(state.error_deg).toFixed(2) + '\u00B0';
+    if (state.rl_mode !== undefined) paintCtrlMode(!!state.rl_mode);
 
-    // Update step response metrics
     if (stepInfo && !stepInfo.done) {
       const prog = (state.angle_deg - stepInfo.start) / stepInfo.delta;
       const now = performance.now();
@@ -436,33 +662,47 @@ setInterval(async () => {
       }
     }
 
-    // Compute 3-phase duties from field phase
     const rad = (state.o & 0xFF00) / 65536 * 2 * Math.PI;
-    const da = Math.round(2500 * (1 + (1.0/4.5) * Math.sin(rad)));
-    const db = Math.round(2500 * (1 + (1.0/4.5) * Math.sin(rad - 2*Math.PI/3)));
-    const dc = Math.round(2500 * (1 + (1.0/4.5) * Math.sin(rad + 2*Math.PI/3)));
+    let va, vb, vc;
+    if (state.fpga_rl && state.rl_vd !== undefined && state.rl_vq !== undefined) {
+      const vd = state.rl_vd, vq = state.rl_vq;
+      va = vd * Math.cos(rad) - vq * Math.sin(rad);
+      vb = vd * Math.cos(rad - 2*Math.PI/3) - vq * Math.sin(rad - 2*Math.PI/3);
+      vc = vd * Math.cos(rad + 2*Math.PI/3) - vq * Math.sin(rad + 2*Math.PI/3);
+    } else {
+      va = Math.sin(rad);
+      vb = Math.sin(rad - 2*Math.PI/3);
+      vc = Math.sin(rad + 2*Math.PI/3);
+    }
+    const clampDuty = (vx) => Math.max(0, Math.min(5000, Math.round(2500 * (1 + vx / 4.5))));
+    const da = clampDuty(va), db = clampDuty(vb), dc = clampDuty(vc);
     document.getElementById('bar-a').style.width = (da/50) + '%'; document.getElementById('txt-a').textContent = da;
     document.getElementById('bar-b').style.width = (db/50) + '%'; document.getElementById('txt-b').textContent = db;
     document.getElementById('bar-c').style.width = (dc/50) + '%'; document.getElementById('txt-c').textContent = dc;
 
-    // RL Actor live shadow telemetry
     if (state.rl_iq !== undefined) {
       document.getElementById('rl-iqref').textContent = `iq* = ${(state.rl_iq>=0?'+':'')}${state.rl_iq.toFixed(3)} A`;
-      document.getElementById('rl-vdq').textContent = `vd=${state.rl_vd.toFixed(2)}V, vq=${state.rl_vq.toFixed(2)}V`;
+      document.getElementById('rl-vdq').textContent = `vd=${state.rl_vd.toFixed(2)}V vq=${state.rl_vq.toFixed(2)}V`;
     }
-    document.getElementById('hw-health').textContent = `ADC=${state.a} | nFAULT=${state.f ? 'HIGH' : 'LOW'}`;
+    document.getElementById('hw-health').textContent = `ADC=${state.a} \u00B7 nFAULT=${state.f ? '1' : '0'}`;
 
     const dot = document.getElementById('status-dot');
     const stxt = document.getElementById('status-text');
-    if (state.m === 5) {
+    if (state.connected === false) {
+      dot.className = 'dot fault';
+      stxt.textContent = 'Serial reconnecting...';
+    } else if (state.m === 5) {
       dot.className = 'dot live';
-      stxt.textContent = `CLOSED-LOOP ACTIVE (EN=1) | AS5600=${state.r}`;
+      stxt.textContent = `Running \u00B7 enc ${state.r}`;
     } else if (state.m === 6) {
       dot.className = 'dot fault';
-      stxt.textContent = `FAULT LATCHED (code=${state.q})`;
+      stxt.textContent = `Fault (q=${state.q}) \u00B7 click Arm`;
+    } else if (state.q === 6) {
+      dot.className = 'dot fault';
+      stxt.textContent = `Check sensor (q=6) \u00B7 enc ${state.r}`;
     } else {
       dot.className = 'dot';
-      stxt.textContent = `STANDBY (state=${state.m})`;
+      stxt.textContent = `Standby (m=${state.m})`;
     }
 
     hist.push({
@@ -473,7 +713,6 @@ setInterval(async () => {
   } catch (e) {}
 }, 50);
 
-// Resize canvases
 const s1 = document.getElementById('scope1'), s2 = document.getElementById('scope2');
 const seaCanvas = document.getElementById('sea-canvas');
 function resizeAll() {
@@ -487,7 +726,6 @@ function resizeAll() {
 window.addEventListener('resize', resizeAll);
 setTimeout(resizeAll, 50);
 
-// Ship game state with full mission objective, mines, gold buoys, hull HP, combo, and AI Auto-Helmsman
 let game = {
   active: true,
   timeLeft: 60.0,
@@ -499,7 +737,6 @@ let game = {
   shipX: 0,
   cmdShipX: 0,
   autoHelmsman: false,
-  shake: 0,
   banners: [],
   items: [
     { type: 'gate', x: -0.18, y: 220, p: false },
@@ -520,27 +757,27 @@ function startGame() {
   game.combo = 1;
   game.score = 0;
   game.shipX = 0;
-  game.banners = [{ text: 'MISSION START! COLLECT GOLD & SLALOM GATES, AVOID MINES!', color: '#38bdf8', a: 1.0, y: 0.4 }];
+  game.banners = [{ text: 'Hold steady through the gates', color: C.earth, a: 1.0, y: 0.40 }];
   updateGameHud();
 }
 
 function toggleHelmsman() {
   game.autoHelmsman = !game.autoHelmsman;
   const btn = document.getElementById('auto-helmsman-btn');
-  btn.textContent = game.autoHelmsman ? '🤖 AI Auto-Helmsman: ON' : '🤖 AI Auto-Helmsman: OFF';
-  btn.style.borderColor = game.autoHelmsman ? '#34d399' : '';
+  btn.textContent = game.autoHelmsman ? 'Auto steer: on' : 'Auto steer: off';
+  btn.className = game.autoHelmsman ? 'ctrl active-sky' : 'ctrl';
 }
 
 function updateGameHud() {
   document.getElementById('gm-time').textContent = Math.max(0, game.timeLeft).toFixed(1) + ' s';
-  document.getElementById('gm-hull').textContent = (game.hull > 0 ? '❤️'.repeat(game.hull) + ' ' + Math.round(game.hull/3*100) + '%' : '💥 SUNK (0%)');
+  document.getElementById('gm-hull').textContent = game.hull > 0 ? `${game.hull} / 3` : '0 / 3';
   document.getElementById('gm-combo').textContent = game.combo + 'x';
   document.getElementById('ship-score').textContent = game.score;
   document.getElementById('gm-best').textContent = game.best;
 }
 
 function drawGrid(ctx, W, H) {
-  ctx.strokeStyle = 'rgba(148, 163, 184, 0.12)';
+  ctx.strokeStyle = C.earthGrid;
   ctx.lineWidth = 1;
   for (let i = 1; i < 6; i++) {
     const y = (H / 6) * i;
@@ -550,7 +787,7 @@ function drawGrid(ctx, W, H) {
     const x = (W / 10) * i;
     ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
   }
-  ctx.strokeStyle = 'rgba(148, 163, 184, 0.3)';
+  ctx.strokeStyle = C.earthAxis;
   ctx.beginPath(); ctx.moveTo(0, H/2); ctx.lineTo(W, H/2); ctx.stroke();
 }
 
@@ -558,7 +795,6 @@ function render(now) {
   if (!dragging && Math.abs(wheelVel) > 0.05) {
     sendHelm(cmdAngle + wheelVel); wheelVel *= 0.90;
   }
-  // Haptic spring / detent mode: snap target to nearest 45 deg detent or back to 0
   if (mode === 'spring' && !dragging) {
     const nearestDetent = Math.round(cmdAngle / 45) * 45;
     sendHelm(cmdAngle + (nearestDetent - cmdAngle) * 0.15, 16);
@@ -573,72 +809,86 @@ function render(now) {
     sendHelm(55 * Math.sin(now * 0.006 * f), 22);
   }
 
-  // 1. Draw Rotor / Flywheel
-  wctx.clearRect(0, 0, 240, 240);
-  const cx = 120, cy = 120, R = 88;
+  // 1. Rotor Dial
+  wctx.clearRect(0, 0, 228, 228);
+  const cx = 114, cy = 114, R = 82;
   for (let d = -180; d < 180; d += 15) {
     const rad = (d - 90) * Math.PI / 180;
     const isDetent = (mode === 'spring' && d % 45 === 0);
-    wctx.strokeStyle = isDetent ? '#a78bfa' : (d % 45 === 0 ? 'rgba(226,232,240,0.6)' : 'rgba(148,163,184,0.2)');
-    wctx.lineWidth = isDetent ? 3 : (d % 45 === 0 ? 2 : 1);
+    wctx.strokeStyle = isDetent ? C.moss : (d % 45 === 0 ? C.earthSoft : 'rgba(81, 50, 41, 0.20)');
+    wctx.lineWidth = isDetent ? 2.8 : (d % 45 === 0 ? 1.8 : 1);
     wctx.beginPath();
-    wctx.moveTo(cx + Math.cos(rad)*(R+8), cy + Math.sin(rad)*(R+8));
-    wctx.lineTo(cx + Math.cos(rad)*(R+18), cy + Math.sin(rad)*(R+18));
+    wctx.moveTo(cx + Math.cos(rad)*(R+7), cy + Math.sin(rad)*(R+7));
+    wctx.lineTo(cx + Math.cos(rad)*(R+16), cy + Math.sin(rad)*(R+16));
     wctx.stroke();
   }
+  wctx.fillStyle = C.oat;
+  wctx.beginPath(); wctx.arc(cx, cy, R-6, 0, Math.PI*2); wctx.fill();
   wctx.save(); wctx.translate(cx, cy); wctx.rotate(cmdAngle * Math.PI / 180);
   for (let i = 0; i < 6; i++) {
     const a = i * Math.PI / 3;
-    wctx.strokeStyle = '#334155'; wctx.lineWidth = 6;
-    wctx.beginPath(); wctx.moveTo(0,0); wctx.lineTo(Math.cos(a)*R, Math.sin(a)*R); wctx.stroke();
+    wctx.strokeStyle = 'rgba(215, 212, 177, 0.85)'; wctx.lineWidth = 4;
+    wctx.beginPath(); wctx.moveTo(0,0); wctx.lineTo(Math.cos(a)*(R-6), Math.sin(a)*(R-6)); wctx.stroke();
   }
-  wctx.strokeStyle = '#475569'; wctx.lineWidth = 12;
+  wctx.strokeStyle = C.earth; wctx.lineWidth = 9;
   wctx.beginPath(); wctx.arc(0, 0, R-6, 0, Math.PI*2); wctx.stroke();
-  wctx.fillStyle = '#fbbf24';
-  wctx.beginPath(); wctx.moveTo(0, -R-10); wctx.lineTo(-7, -R+5); wctx.lineTo(7, -R+5); wctx.closePath(); wctx.fill();
+  // Target marker
+  wctx.fillStyle = C.bay;
+  wctx.strokeStyle = C.earth;
+  wctx.lineWidth = 1.5;
+  wctx.beginPath(); wctx.moveTo(0, -R-9); wctx.lineTo(-7, -R+5); wctx.lineTo(7, -R+5); wctx.closePath();
+  wctx.fill(); wctx.stroke();
   wctx.restore();
 
-  // Actual shaft needle
+  // Measured shaft hand
   wctx.save(); wctx.translate(cx, cy); wctx.rotate(state.angle_deg * Math.PI / 180);
-  wctx.strokeStyle = '#38bdf8'; wctx.lineWidth = 4; wctx.shadowColor = '#38bdf8'; wctx.shadowBlur = 10;
-  wctx.beginPath(); wctx.moveTo(0, 12); wctx.lineTo(0, -R+4); wctx.stroke();
+  wctx.strokeStyle = C.skyInk; wctx.lineWidth = 3.5; wctx.lineCap = 'round';
+  wctx.beginPath(); wctx.moveTo(0, 14); wctx.lineTo(0, -R+5); wctx.stroke();
+  wctx.fillStyle = C.earth;
+  wctx.beginPath(); wctx.arc(0, 0, 5, 0, Math.PI*2); wctx.fill();
   wctx.restore();
 
-  // 2. Draw Space-Vector Phasor Diagram
+  // 2. Stator Vector Diagram
   const pCanvas = document.getElementById('phasor-canvas');
   const pctx = pCanvas.getContext('2d');
-  pctx.clearRect(0, 0, 230, 230);
-  const px = 115, py = 115, pR = 82;
-  pctx.strokeStyle = 'rgba(148,163,184,0.2)'; pctx.lineWidth = 1;
+  pctx.clearRect(0, 0, 224, 224);
+  const px = 112, py = 112, pR = 76;
+  pctx.fillStyle = C.oat;
+  pctx.beginPath(); pctx.arc(px, py, pR, 0, Math.PI*2); pctx.fill();
+  pctx.strokeStyle = C.earthAxis; pctx.lineWidth = 1;
   pctx.beginPath(); pctx.arc(px, py, pR, 0, Math.PI*2); pctx.stroke();
+  pctx.strokeStyle = C.earthGrid;
   pctx.beginPath(); pctx.arc(px, py, pR*0.5, 0, Math.PI*2); pctx.stroke();
-  // 3-phase stator axes (A=0, B=120, C=240)
-  for (const [ang, lbl, col] of [[0,'Va (0°)','#38bdf8'],[120,'Vb (120°)','#fbbf24'],[240,'Vc (240°)','#fb7185']]) {
-    const r = (ang - 90) * Math.PI / 180;
-    pctx.strokeStyle = 'rgba(255,255,255,0.12)';
-    pctx.beginPath(); pctx.moveTo(px, py); pctx.lineTo(px + Math.cos(r)*(pR+10), py + Math.sin(r)*(pR+10)); pctx.stroke();
-    pctx.fillStyle = col; pctx.font = '10px monospace';
-    pctx.fillText(lbl, px + Math.cos(r)*(pR+18) - 18, py + Math.sin(r)*(pR+18) + 3);
-  }
-  // Rotor d-axis (7 * mechanical angle)
-  const elecRotorRad = (7 * state.angle_deg - 90) * Math.PI / 180;
-  pctx.strokeStyle = '#34d399'; pctx.lineWidth = 2;
-  pctx.beginPath(); pctx.moveTo(px, py); pctx.lineTo(px + Math.cos(elecRotorRad)*pR*0.8, py + Math.sin(elecRotorRad)*pR*0.8); pctx.stroke();
-  // Stator voltage vector Vs
-  const statorRad = ((state.o / 65536) * 360 - 90) * Math.PI / 180;
-  pctx.strokeStyle = '#a78bfa'; pctx.lineWidth = 3;
-  pctx.beginPath(); pctx.moveTo(px, py); pctx.lineTo(px + Math.cos(statorRad)*pR, py + Math.sin(statorRad)*pR); pctx.stroke();
-  pctx.fillStyle = '#a78bfa';
-  pctx.beginPath(); pctx.arc(px + Math.cos(statorRad)*pR, py + Math.sin(statorRad)*pR, 5, 0, Math.PI*2); pctx.fill();
 
-  // 3. Draw Dual Oscilloscopes
+  for (const [ang, lbl, col] of [[0,'Va',C.skyInk],[120,'Vb',C.bayInk],[240,'Vc',C.terracotta]]) {
+    const r = (ang - 90) * Math.PI / 180;
+    pctx.strokeStyle = C.earthGrid;
+    pctx.beginPath(); pctx.moveTo(px, py); pctx.lineTo(px + Math.cos(r)*(pR+8), py + Math.sin(r)*(pR+8)); pctx.stroke();
+    pctx.fillStyle = col; pctx.font = '600 11px ui-monospace, monospace'; pctx.textAlign = 'center';
+    pctx.fillText(lbl, px + Math.cos(r)*(pR+20), py + Math.sin(r)*(pR+20) + 4);
+  }
+  pctx.textAlign = 'left';
+
+  const elecRotorRad = (7 * state.angle_deg - 90) * Math.PI / 180;
+  pctx.strokeStyle = C.moss; pctx.lineWidth = 2; pctx.lineCap = 'round';
+  pctx.beginPath(); pctx.moveTo(px, py); pctx.lineTo(px + Math.cos(elecRotorRad)*pR*0.78, py + Math.sin(elecRotorRad)*pR*0.78); pctx.stroke();
+
+  const statorRad = ((state.o / 65536) * 360 - 90) * Math.PI / 180;
+  pctx.strokeStyle = C.earth; pctx.lineWidth = 2.8;
+  pctx.beginPath(); pctx.moveTo(px, py); pctx.lineTo(px + Math.cos(statorRad)*pR, py + Math.sin(statorRad)*pR); pctx.stroke();
+  pctx.fillStyle = C.bay;
+  pctx.strokeStyle = C.earth; pctx.lineWidth = 1.5;
+  pctx.beginPath(); pctx.arc(px + Math.cos(statorRad)*pR, py + Math.sin(statorRad)*pR, 5, 0, Math.PI*2); pctx.fill(); pctx.stroke();
+
+  // 3. Oscilloscopes or Harbor Slalom
   if (mode !== 'ship' && hist.length > 1) {
     resizeAll();
     const ctx1 = s1.getContext('2d'), W1 = s1.width, H1 = s1.height;
     ctx1.clearRect(0, 0, W1, H1);
     drawGrid(ctx1, W1, H1);
-    const plotLine = (ctx, W, H, key, scale, color, width=2.5) => {
-      ctx.strokeStyle = color; ctx.lineWidth = width;
+    const plotLine = (ctx, W, H, key, scale, color, width=2.4) => {
+      ctx.strokeStyle = color; ctx.lineWidth = width * devicePixelRatio * 0.7;
+      ctx.lineJoin = 'round';
       ctx.beginPath();
       for (let i = 0; i < hist.length; i++) {
         const x = (i / (MAX_HIST - 1)) * W;
@@ -647,30 +897,35 @@ function render(now) {
       }
       ctx.stroke();
     };
-    plotLine(ctx1, W1, H1, 'cmd', 140, '#fbbf24', 2);
-    plotLine(ctx1, W1, H1, 'act', 140, '#38bdf8', 3);
-    plotLine(ctx1, W1, H1, 'err', 140, '#34d399', 1.5);
+    plotLine(ctx1, W1, H1, 'cmd', 140, C.bayInk, 2.1);
+    plotLine(ctx1, W1, H1, 'act', 140, C.skyInk, 3.0);
+    plotLine(ctx1, W1, H1, 'err', 140, C.moss, 1.6);
 
     const ctx2 = s2.getContext('2d'), W2 = s2.width, H2 = s2.height;
     ctx2.clearRect(0, 0, W2, H2);
     drawGrid(ctx2, W2, H2);
-    plotLine(ctx2, W2, H2, 'da', 1.1, '#38bdf8', 2);
-    plotLine(ctx2, W2, H2, 'db', 1.1, '#fbbf24', 2);
-    plotLine(ctx2, W2, H2, 'dc', 1.1, '#fb7185', 2);
+    plotLine(ctx2, W2, H2, 'da', 1.1, C.skyInk, 2.0);
+    plotLine(ctx2, W2, H2, 'db', 1.1, C.bayInk, 2.0);
+    plotLine(ctx2, W2, H2, 'dc', 1.1, C.terracotta, 2.0);
   } else if (mode === 'ship') {
     resizeAll();
     const sctx = seaCanvas.getContext('2d'), W = seaCanvas.width, H = seaCanvas.height;
     const dt = Math.min(0.1, (now - game.lastTick) / 1000);
     game.lastTick = now;
-    sctx.clearRect(0, 0, W, H);
 
-    // Channel boundaries
-    sctx.strokeStyle = 'rgba(56, 189, 248, 0.18)';
+    // Soft coastal water fill ("Something Blue") with sandy dune edges ("The Bay")
+    sctx.fillStyle = C.sky;
+    sctx.fillRect(0, 0, W, H);
+    sctx.fillStyle = 'rgba(244, 241, 226, 0.72)';
+    sctx.fillRect(0, 0, W * 0.08, H);
+    sctx.fillRect(W * 0.92, 0, W * 0.08, H);
+
+    sctx.strokeStyle = 'rgba(81, 50, 41, 0.22)';
+    sctx.lineWidth = 2;
     sctx.setLineDash([10, 10]);
     sctx.beginPath(); sctx.moveTo(W*0.08, 0); sctx.lineTo(W*0.08, H); sctx.moveTo(W*0.92, 0); sctx.lineTo(W*0.92, H); sctx.stroke();
     sctx.setLineDash([]);
 
-    // AI Auto-Helmsman: look ahead at the nearest upcoming gate/coin/mine and command the physical motor!
     if (game.autoHelmsman && game.active) {
       let nearest = null, minD = 9999;
       for (const it of game.items) {
@@ -687,8 +942,6 @@ function render(now) {
       }
     }
 
-    // Direct mapping: Rotor Angle (-110 deg .. +110 deg) maps directly + smoothly to channel lateral position
-    // AND heading angle! That way when M0 lags by 30 deg, the ghost ship (Gold) dodges the mine while the physical ship (Cyan) hits it!
     const actualAngle = (state.m === 5) ? state.angle_deg : cmdAngle;
     const targetXActual = Math.max(-0.38, Math.min(0.38, actualAngle / 260));
     const targetXCmd    = Math.max(-0.38, Math.min(0.38, cmdAngle / 260));
@@ -700,8 +953,8 @@ function render(now) {
       if (game.timeLeft <= 0 || game.hull <= 0) {
         game.active = false;
         if (game.score > game.best) game.best = game.score;
-        const msg = game.hull <= 0 ? '💥 HULL BREACHED! CLICK [▶ NEW 60s RUN]' : `🏆 RUN COMPLETE! FINAL SCORE: ${game.score}`;
-        game.banners.push({ text: msg, color: '#fbbf24', a: 1.0, y: 0.45 });
+        const msg = game.hull <= 0 ? 'Hull lost \u00B7 press New run' : `Finished \u00B7 ${game.score} pts`;
+        game.banners.push({ text: msg, color: C.earth, a: 1.0, y: 0.45 });
       }
       updateGameHud();
     }
@@ -709,16 +962,14 @@ function render(now) {
     const sy = H * 0.78;
     const sx = W * (0.5 + game.shipX);
     const gsx = W * (0.5 + game.cmdShipX);
-
-    // Speed scales up as timer progresses
     const speed = game.active ? (3.2 + (60 - Math.max(0, game.timeLeft)) * 0.035) : 0.8;
 
-    // Wake trail
-    game.wake.push({ x: sx, y: sy + 20, r: 5, a: 0.5 });
-    if (game.wake.length > 50) game.wake.shift();
+    game.wake.push({ x: sx, y: sy + 20, r: 5, a: 0.42 });
+    if (game.wake.length > 45) game.wake.shift();
     for (const wk of game.wake) {
       wk.y += speed; wk.r += 0.35; wk.a *= 0.95;
-      sctx.strokeStyle = `rgba(56, 189, 248, ${wk.a})`;
+      sctx.strokeStyle = `rgba(255, 255, 255, ${wk.a})`;
+      sctx.lineWidth = 2;
       sctx.beginPath(); sctx.arc(wk.x, wk.y, wk.r, 0, Math.PI*2); sctx.stroke();
     }
 
@@ -729,9 +980,9 @@ function render(now) {
 
       if (it.type === 'gate') {
         const gap = W * 0.095;
-        sctx.fillStyle = '#fb7185'; sctx.beginPath(); sctx.arc(ix - gap, iy, 10, 0, Math.PI*2); sctx.fill();
-        sctx.fillStyle = '#34d399'; sctx.beginPath(); sctx.arc(ix + gap, iy, 10, 0, Math.PI*2); sctx.fill();
-        sctx.strokeStyle = it.p ? 'rgba(52, 211, 153, 0.5)' : 'rgba(251, 191, 36, 0.45)';
+        sctx.fillStyle = C.terracotta; sctx.beginPath(); sctx.arc(ix - gap, iy, 9, 0, Math.PI*2); sctx.fill();
+        sctx.fillStyle = C.moss; sctx.beginPath(); sctx.arc(ix + gap, iy, 9, 0, Math.PI*2); sctx.fill();
+        sctx.strokeStyle = it.p ? 'rgba(84, 100, 66, 0.45)' : 'rgba(81, 50, 41, 0.35)';
         sctx.lineWidth = 2; sctx.setLineDash([6, 6]);
         sctx.beginPath(); sctx.moveTo(ix - gap, iy); sctx.lineTo(ix + gap, iy); sctx.stroke();
         sctx.setLineDash([]);
@@ -741,38 +992,37 @@ function render(now) {
             const pts = 100 * game.combo;
             game.score += pts; game.combo = Math.min(8, game.combo + 1);
             if (game.score > game.best) game.best = game.score;
-            game.banners.push({ text: `+${pts} GATE CLEAR! (${game.combo}x)`, color: '#34d399', a: 1.0, y: 0.62 });
+            game.banners.push({ text: `+${pts} Gate (${game.combo}x)`, color: C.moss, a: 1.0, y: 0.62 });
           } else {
             game.combo = 1;
-            game.banners.push({ text: 'MISSED GATE (1x)', color: '#94a3b8', a: 0.9, y: 0.62 });
+            game.banners.push({ text: 'Missed gate', color: C.earthSoft, a: 0.9, y: 0.62 });
           }
         }
       } else if (it.type === 'coin') {
         if (!it.p) {
-          sctx.fillStyle = '#fbbf24'; sctx.strokeStyle = '#fef08a'; sctx.lineWidth = 2;
-          sctx.beginPath(); sctx.arc(ix, iy, 12, 0, Math.PI*2); sctx.fill(); sctx.stroke();
-          sctx.fillStyle = '#050b14'; sctx.font = 'bold 11px monospace'; sctx.fillText('★', ix - 4, iy + 4);
+          sctx.fillStyle = C.bay; sctx.strokeStyle = C.earth; sctx.lineWidth = 2;
+          sctx.beginPath(); sctx.arc(ix, iy, 11, 0, Math.PI*2); sctx.fill(); sctx.stroke();
           if (game.active && Math.hypot(sx - ix, sy - iy) < 32) {
             it.p = true;
             const pts = 150 * game.combo;
             game.score += pts; game.combo = Math.min(8, game.combo + 1);
             if (game.score > game.best) game.best = game.score;
-            game.banners.push({ text: `+${pts} DATA BEACON!`, color: '#fbbf24', a: 1.0, y: 0.58 });
+            game.banners.push({ text: `+${pts} Buoy`, color: C.bayInk, a: 1.0, y: 0.58 });
           }
         }
       } else if (it.type === 'mine') {
         if (!it.p) {
-          sctx.fillStyle = '#ef4444'; sctx.strokeStyle = '#fecdd3'; sctx.lineWidth = 2;
-          sctx.beginPath(); sctx.arc(ix, iy, 14, 0, Math.PI*2); sctx.fill(); sctx.stroke();
+          sctx.fillStyle = C.terracotta; sctx.strokeStyle = C.earth; sctx.lineWidth = 2;
+          sctx.beginPath(); sctx.arc(ix, iy, 13, 0, Math.PI*2); sctx.fill(); sctx.stroke();
           for (let k = 0; k < 8; k++) {
             const ma = k * Math.PI / 4 + now * 0.002;
-            sctx.beginPath(); sctx.moveTo(ix + Math.cos(ma)*14, iy + Math.sin(ma)*14);
-            sctx.lineTo(ix + Math.cos(ma)*21, iy + Math.sin(ma)*21); sctx.stroke();
+            sctx.beginPath(); sctx.moveTo(ix + Math.cos(ma)*13, iy + Math.sin(ma)*13);
+            sctx.lineTo(ix + Math.cos(ma)*19, iy + Math.sin(ma)*19); sctx.stroke();
           }
           if (game.active && Math.hypot(sx - ix, sy - iy) < 34) {
             it.p = true;
             game.hull -= 1; game.combo = 1;
-            game.banners.push({ text: '💥 MINE HIT! -1 HULL', color: '#fb7185', a: 1.0, y: 0.52 });
+            game.banners.push({ text: 'Reef hit \u00B7 -1 hull', color: C.terracotta, a: 1.0, y: 0.52 });
           }
         }
       }
@@ -784,26 +1034,26 @@ function render(now) {
       }
     }
 
-    // Draw Commanded Ghost Ship (Gold dashed outline) so lag between θ* and θm is visually obvious!
+    // Target outline
     sctx.save(); sctx.translate(gsx, sy); sctx.rotate((targetXCmd - game.cmdShipX)*120 * Math.PI/180);
-    sctx.strokeStyle = 'rgba(251, 191, 36, 0.45)'; sctx.lineWidth = 2; sctx.setLineDash([4, 4]);
-    sctx.beginPath(); sctx.moveTo(0,-38); sctx.quadraticCurveTo(16,-10,13,28); sctx.lineTo(-13,28); sctx.quadraticCurveTo(-16,-10,0,-38); sctx.stroke();
+    sctx.strokeStyle = 'rgba(156, 98, 30, 0.55)'; sctx.lineWidth = 2; sctx.setLineDash([4, 4]);
+    sctx.beginPath(); sctx.moveTo(0,-36); sctx.quadraticCurveTo(15,-10,12,26); sctx.lineTo(-12,26); sctx.quadraticCurveTo(-15,-10,0,-36); sctx.stroke();
     sctx.setLineDash([]); sctx.restore();
 
-    // Draw Actual Motor-Driven Ship (Cyan)
+    // Actual boat
     sctx.save(); sctx.translate(sx, sy); sctx.rotate((targetXActual - game.shipX)*140 * Math.PI/180);
-    sctx.fillStyle = '#f8fafc'; sctx.strokeStyle = '#38bdf8'; sctx.lineWidth = 3;
-    sctx.beginPath(); sctx.moveTo(0,-40); sctx.quadraticCurveTo(18,-10,14,30); sctx.lineTo(-14,30); sctx.quadraticCurveTo(-18,-10,0,-40); sctx.fill(); sctx.stroke();
-    sctx.fillStyle = '#38bdf8'; sctx.beginPath(); sctx.arc(0, -6, 7, 0, Math.PI*2); sctx.fill();
+    sctx.fillStyle = C.oat; sctx.strokeStyle = C.earth; sctx.lineWidth = 2.8;
+    sctx.beginPath(); sctx.moveTo(0,-38); sctx.quadraticCurveTo(17,-10,13,28); sctx.lineTo(-13,28); sctx.quadraticCurveTo(-17,-10,0,-38); sctx.fill(); sctx.stroke();
+    sctx.fillStyle = C.bay; sctx.strokeStyle = C.earth; sctx.lineWidth = 1.5;
+    sctx.beginPath(); sctx.arc(0, -5, 6, 0, Math.PI*2); sctx.fill(); sctx.stroke();
     sctx.restore();
 
-    // Floating event banners
     for (let i = game.banners.length - 1; i >= 0; i--) {
       const b = game.banners[i];
       b.y -= 0.0018; b.a -= 0.012;
       if (b.a <= 0) { game.banners.splice(i, 1); continue; }
       sctx.fillStyle = b.color; sctx.globalAlpha = Math.max(0, b.a);
-      sctx.font = 'bold 16px monospace'; sctx.textAlign = 'center';
+      sctx.font = '600 18px Georgia, serif'; sctx.textAlign = 'center';
       sctx.fillText(b.text, W/2, H * b.y);
       sctx.globalAlpha = 1.0; sctx.textAlign = 'left';
     }

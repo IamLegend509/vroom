@@ -45,7 +45,7 @@ TANH_STEP_BITS = 6           # table step 1/64
 TANH_N = 513
 
 # name -> (inputs, lanes, weight bits for W0, W1, W2)
-ACTORS = {'inner': (25, 32, (16, 16, 16)), 'outer': (19, 16, (16, 9, 16))}
+ACTORS = {'inner': (25, 16, (16, 16, 16)), 'outer': (19, 16, (16, 9, 16))}
 H = 256
 
 
@@ -148,6 +148,44 @@ def write_mems(layers, name, out):
         (out / f'{name}_bs{j}.mem').write_text('\n'.join(bl) + '\n')
 
 
+def write_combined_mems(all_layers, out):
+    """Compact shared-engine tables for LANES=16 dual-actor RTL.
+
+    w2_comb.mem  : 512 x 32b ({w2[row1, k], w2[row0, k]} for inner 0..255, outer 256..511)
+    bs_comb.mem  : 64 x 480b (16 lanes x {shm1[4:0], bias[24:0]} for {actor, layer0/1, lr})
+    bs2_comb.mem : 2 x 60b   (2 output lanes x {shm1[4:0], bias[24:0]} for inner/outer layer2)
+    """
+    w2_lines, bs_lines, bs2_lines = [], [], []
+    for name in ('inner', 'outer'):
+        layers = all_layers[name]
+        for j in (0, 1):
+            L = layers[j]
+            for lr in range(H // 16):
+                fields = []
+                for l in range(16):
+                    r = lr * 16 + l
+                    shm1 = int(L['sh'][r]) - 1
+                    if not (7 <= shm1 <= 30):
+                        raise ValueError(f'{name} layer {j} row {r}: sh-1={shm1} out of [7, 30]')
+                    b = int(L['b'][r])
+                    fields.append((shm1 << BIAS_BITS) | (b & ((1 << BIAS_BITS) - 1)))
+                bs_lines.append(pack(fields, 5 + BIAS_BITS))
+        L2 = layers[2]
+        for k in range(H):
+            w2_lines.append(pack([L2['w'][0, k], L2['w'][1, k]], 16))
+        f2 = []
+        for r in (0, 1):
+            shm1 = int(L2['sh'][r]) - 1
+            if not (7 <= shm1 <= 30):
+                raise ValueError(f'{name} layer 2 row {r}: sh-1={shm1} out of [7, 30]')
+            b = int(L2['b'][r])
+            f2.append((shm1 << BIAS_BITS) | (b & ((1 << BIAS_BITS) - 1)))
+        bs2_lines.append(pack(f2, 5 + BIAS_BITS))
+    (out / 'w2_comb.mem').write_text('\n'.join(w2_lines) + '\n')
+    (out / 'bs_comb.mem').write_text('\n'.join(bs_lines) + '\n')
+    (out / 'bs2_comb.mem').write_text('\n'.join(bs2_lines) + '\n')
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--checkpoint', type=pathlib.Path, default=PAIR / 'selected_checkpoint.npz')
@@ -162,9 +200,11 @@ def main():
               'activation_frac_bits': FA, 'activation_max': ACT_MAX, 'tanh_entries': TANH_N,
               'actors': {}}
     (a.out / 'tanh.mem').write_text('\n'.join(hexw(v, 16) for v in TANH) + '\n')
+    all_layers = {}
     with np.load(a.vectors, allow_pickle=False) as g:
         for name, (nin, lanes, bits) in ACTORS.items():
             layers = quantize_actor(weights, name)
+            all_layers[name] = layers
             write_mems(layers, name, a.out)
             xi = quantize_input(g[f'{name}_input'])
             y, z = forward_int(layers, xi)
@@ -177,6 +217,7 @@ def main():
                 'max_abs_error_vs_fp32': float(err.max()), 'mean_abs_error_vs_fp32': float(err.mean()),
                 'max_abs_preact_q14': int(np.abs(z).max()),
                 'cycles_estimate': (H // lanes) * nin + (H // lanes) * H + H}
+    write_combined_mems(all_layers, a.out)
     (a.out / 'quant_report.json').write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))
 

@@ -1,6 +1,14 @@
+# Python
 __pycache__/
 *.pyc
+*.pyo
 .venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# PlatformIO / ESP-IDF
 .pio/
 hw/focmini/idf/build/
 hw/focmini/idf/managed_components/
@@ -8,12 +16,24 @@ hw/focmini/idf/dependencies.lock
 hw/focmini/idf/sdkconfig
 hw/focmini/idf/sdkconfig.old
 hw/focmini/idf/sdkconfig.esp32dev_*
+
+# macOS / Windows
+.DS_Store
+Thumbs.db
+
+# Simulation-only bulk artifacts (never merged to main per AGENTS.md)
 results/
+Vroom_2805_Experimental_Controller_Pair/
+Vroom_*/
 *.zip
 *.pkl
 *.npz
 *.csv.gz
 *.csv
+*.pt
+*.pth
+*.ckpt
+*.onnx
 status.json
 queue_status.json
 manifest.json
@@ -21,5 +41,23 @@ validation.jsonl
 physical_samples.jsonl
 lit/
 TRANSFER/
+
+# FPGA build outputs (Vivado / openxc7 / yosys; RTL sources stay tracked)
+*.bit
+*.ltx
+*.bif
+*.mcs
+*.prm
+.Xil/
+*.jou
+*.log
+*.vcd
+*.wvd
+*.dmp
+
+# Secrets / local env
+.env
+
+# Editors
 .vscode/
 .idea/
