@@ -146,6 +146,9 @@
     border-bottom: 1px solid var(--border);
     padding-bottom: 5px;
   }
+  .motor-controls { overflow-y: auto; }
+  .motor-controls > * { flex-shrink: 0; }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
   .card-title span.sub {
     text-transform: none;
     letter-spacing: 0;
@@ -315,10 +318,10 @@
 
   <div class="main-grid">
     <!-- LEFT COLUMN: ROTOR DIAL + CONTROLS -->
-    <div class="card">
+    <div class="card motor-controls">
       <div class="card-title">
         <span>Rotor Dial</span>
-        <span class="sub">Drag or scroll</span>
+        <span class="sub">Direct tracking &middot; multi-turn</span>
       </div>
       <div style="display:flex;justify-content:center;align-items:center;padding:2px 0;">
         <canvas id="wheel-canvas" width="228" height="228" style="cursor:grab;"></canvas>
@@ -344,7 +347,7 @@
       </div>
 
       <div class="slider-row">
-        <span>Slew rate</span>
+        <span>Auto-move rate</span>
         <input type="range" id="slew-slider" min="1" max="28" value="14">
         <span id="slew-label" style="font-family:var(--mono);color:var(--earth);width:56px;text-align:right">123&deg;/s</span>
       </div>
@@ -361,6 +364,17 @@
         <button class="ctrl arm" onclick="armMotor()">Arm motor</button>
         <button class="ctrl stop" onclick="stopMotor()">Stop</button>
       </div>
+
+      <div class="card-title" style="margin-top:2px;">
+        <span>Full turns</span>
+        <span class="sub">720&deg; at selected slew rate</span>
+      </div>
+      <div class="btn-grid" style="grid-template-columns:1fr 1fr;">
+        <button class="ctrl" id="turn-negative" onclick="startRotation(-2)" disabled>&minus;2 turns</button>
+        <button class="ctrl" id="turn-positive" onclick="startRotation(2)" disabled>+2 turns</button>
+      </div>
+      <div id="turn-status" role="status" style="font-size:12px;line-height:1.4;">Arm the motor to enable full turns.</div>
+      <progress id="turn-progress" value="0" max="2" style="width:100%;accent-color:var(--moss);"></progress>
 
       <div class="card-title" style="margin-top:2px;">
         <span>Test Waveforms</span>
@@ -520,6 +534,9 @@ let wheelVel = 0;
 let dragging = false;
 let lastMouseAngle = 0;
 let lastSendTime = 0;
+let rotationStarting = false;
+let commandError = '';
+let dialControl = false;
 let state = { m:0, g:0, r:0, d:0, z:0, o:0, a:1185, f:1, angle_deg:0, target_deg:0, error_deg:0, rl_iq:0, rl_vd:0, rl_vq:0, rl_mode:1 };
 
 const MAX_HIST = 260;
@@ -528,6 +545,10 @@ let stepInfo = null;
 
 function setMode(m) {
   mode = m;
+  if (m === 'spring' && !dialControl) {
+    cmdAngle = state.unwrapped_angle_deg ?? state.angle_deg;
+    dialControl = true;
+  }
   document.getElementById('tab-ee').className = 'tab-btn' + (m==='ee' ? ' active' : '');
   document.getElementById('tab-spring').className = 'tab-btn' + (m==='spring' ? ' active' : '');
   document.getElementById('tab-ship').className = 'tab-btn' + (m==='ship' ? ' active' : '');
@@ -535,17 +556,68 @@ function setMode(m) {
   document.getElementById('ship-card').style.display = (m==='ship') ? 'flex' : 'none';
 }
 
-function sendHelm(deg, slew) {
-  cmdAngle = Math.max(-175, Math.min(175, deg));
+const DIAL_DEG_S_PER_SLEW = 8.7890625;
+function selectedSlew() { return Number(document.getElementById('slew-slider').value); }
+
+// One outstanding dial request; bursts replace the waiting target instead of
+// building a queue of stale mouse positions. Stop discards the waiting target.
+let pendingHelm = null, helmSending = false;
+async function flushHelm() {
+  helmSending = true;
+  try {
+    while (pendingHelm) {
+      const body = pendingHelm;
+      pendingHelm = null;
+      try { await postCommand('/api/helm', body); }
+      catch (e) { commandError = e.message; pendingHelm = null; }
+    }
+  } finally { helmSending = false; }
+}
+
+function sendHelm(deg, slew, multiTurn = false) {
+  if (rotationStarting || state.rotation?.status === 'running') return;
+  if (!multiTurn && state.dial?.status === 'running') return;
+  if (!Number.isFinite(deg)) return;
+  dialControl = multiTurn;
+  const measured = state.unwrapped_angle_deg ?? state.angle_deg;
+  cmdAngle = multiTurn ? Math.max(measured - 720, Math.min(measured + 720, deg))
+                      : Math.max(-175, Math.min(175, deg));
   document.getElementById('m-cmd').textContent = (cmdAngle>=0?'+':'') + cmdAngle.toFixed(2) + '\u00B0';
   const now = performance.now();
-  if (now - lastSendTime < 35 && slew === undefined) return;
+  if (!multiTurn && now - lastSendTime < 35 && slew === undefined) return;
   lastSendTime = now;
-  fetch('/api/helm', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ angle_deg: cmdAngle, slew: slew })
-  }).catch(() => {});
+  pendingHelm = {
+    angle_deg: cmdAngle,
+    slew: multiTurn && slew === undefined ? selectedSlew() : slew,
+    multi_turn: multiTurn,
+    direct: multiTurn
+  };
+  if (!helmSending) void flushHelm();
+}
+
+async function postCommand(path, body = {}) {
+  const response = await fetch(path, {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
+  });
+  const result = await response.json();
+  if (!response.ok || !result.ok) throw new Error(result.error || 'Command failed');
+  commandError = '';
+  return result;
+}
+
+async function startRotation(turns) {
+  if (rotationStarting || state.rotation?.status === 'running') return;
+  pendingHelm = null;
+  setWave(null); wheelVel = 0; dragging = false; dialControl = false; setMode('ee');
+  rotationStarting = true;
+  hist.length = 0; stepInfo = null;
+  try {
+    await postCommand('/api/rotate', {turns, speed_deg_s: selectedSlew() * DIAL_DEG_S_PER_SLEW});
+  } catch (e) {
+    commandError = e.message;
+  } finally {
+    rotationStarting = false;
+  }
 }
 
 function triggerStep(deg) {
@@ -587,16 +659,24 @@ function paintCtrlMode(rl) {
 }
 
 function setCtrlMode(rl) {
-  fetch('/api/ctrl_mode', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({rl_mode: rl}) });
-  paintCtrlMode(rl);
+  postCommand('/api/ctrl_mode', {rl_mode: rl}).then(() => paintCtrlMode(rl)).catch(e => { commandError = e.message; });
 }
-function armMotor() { fetch('/api/arm', { method: 'POST' }); }
-function stopMotor() { setWave(null); fetch('/api/stop', { method: 'POST' }); }
+function armMotor() {
+  pendingHelm = null;
+  setWave(null); wheelVel = 0;
+  dialControl = false; cmdAngle = 0;
+  postCommand('/api/arm').catch(e => { commandError = e.message; });
+}
+function stopMotor() {
+  pendingHelm = null;
+  setWave(null); wheelVel = 0; dragging = false;
+  postCommand('/api/stop').catch(e => { commandError = e.message; });
+}
 
 document.getElementById('slew-slider').addEventListener('input', (e) => {
   const v = parseInt(e.target.value);
-  document.getElementById('slew-label').textContent = Math.round(v * (state.fpga_rl ? 22.92 : 8.79)) + '\u00B0/s';
-  sendHelm(cmdAngle, v);
+  document.getElementById('slew-label').textContent = Math.round(v * (state.fpga_rl && !dialControl ? 22.92 : DIAL_DEG_S_PER_SLEW)) + '\u00B0/s';
+  if (!dialControl) sendHelm(cmdAngle, v, false);
 });
 
 const wCanvas = document.getElementById('wheel-canvas');
@@ -606,6 +686,8 @@ function mouseAngle(e) {
   return Math.atan2(e.clientY - (rect.top + rect.height/2), e.clientX - (rect.left + rect.width/2)) * 180 / Math.PI;
 }
 wCanvas.addEventListener('pointerdown', (e) => {
+  if (!dialControl) cmdAngle = state.unwrapped_angle_deg ?? state.angle_deg;
+  dialControl = true;
   dragging = true; setWave(null); lastMouseAngle = mouseAngle(e); wheelVel = 0;
   wCanvas.setPointerCapture(e.pointerId);
 });
@@ -614,29 +696,42 @@ wCanvas.addEventListener('pointermove', (e) => {
   const a = mouseAngle(e);
   let d = a - lastMouseAngle;
   if (d > 180) d -= 360; if (d < -180) d += 360;
-  lastMouseAngle = a; wheelVel = d * 0.5;
-  const sl = Math.max(2, Math.min(28, Math.round(Math.abs(d)*1.8 + 4)));
-  const kDegPerSlew = state.fpga_rl ? 22.92 : 8.79;
-  document.getElementById('slew-slider').value = sl;
-  document.getElementById('slew-label').textContent = Math.round(sl * kDegPerSlew) + '\u00B0/s';
-  sendHelm(cmdAngle + d, sl);
+  lastMouseAngle = a; wheelVel = 0;
+  sendHelm(cmdAngle + d, selectedSlew(), true);
 });
 wCanvas.addEventListener('pointerup', () => { dragging = false; });
 wCanvas.addEventListener('wheel', (e) => {
   e.preventDefault(); setWave(null);
-  const d = -e.deltaY * 0.18; wheelVel = d * 0.4;
-  const sl = Math.max(3, Math.min(28, Math.round(Math.abs(d)*1.5 + 5)));
-  const kDegPerSlew = state.fpga_rl ? 22.92 : 8.79;
-  document.getElementById('slew-slider').value = sl;
-  document.getElementById('slew-label').textContent = Math.round(sl * kDegPerSlew) + '\u00B0/s';
-  sendHelm(cmdAngle + d, sl);
+  if (!dialControl) cmdAngle = state.unwrapped_angle_deg ?? state.angle_deg;
+  const d = -e.deltaY * 0.18; wheelVel = 0;
+  sendHelm(cmdAngle + d, selectedSlew(), true);
 }, { passive: false });
 
 setInterval(async () => {
   try {
     const r = await fetch('/api/state');
     state = await r.json();
-    document.getElementById('m-act').textContent = (state.angle_deg>=0?'+':'') + state.angle_deg.toFixed(2) + '\u00B0';
+    const turn = state.rotation || {status: 'idle'};
+    const rotating = turn.status === 'running';
+    const dial = state.dial || {status: 'idle'};
+    const dialMoving = dial.status === 'running';
+    const ready = state.connected && state.m === 5 && state.k && state.f &&
+      Math.abs(state.error_deg) <= 5 && !state.fpga_rl && !rotating && !dialMoving;
+    document.getElementById('turn-negative').disabled = !ready || rotationStarting;
+    document.getElementById('turn-positive').disabled = !ready || rotationStarting;
+    document.getElementById('turn-progress').value = Math.min(2, Math.abs(turn.measured_turns || 0));
+    const measured = (turn.measured_turns || 0).toFixed(3);
+    document.getElementById('turn-status').textContent = commandError || (rotating
+      ? `Moving: ${measured} / ${turn.turns} turns`
+      : dialMoving ? `Dial: ${(state.unwrapped_angle_deg ?? state.angle_deg).toFixed(1)}\u00B0 / ${dial.target_deg.toFixed(1)}\u00B0`
+      : dial.status === 'aborted' ? `Dial stopped: ${dial.reason}`
+      : turn.status === 'complete' ? `Complete: ${measured} turns. ${state.connected && state.m === 5 && state.g ? 'Holding position.' : 'Drive disabled.'}`
+      : turn.status === 'aborted' ? `Stopped: ${turn.reason} (${measured} turns)`
+      : ready ? 'Choose a direction. Stop cancels the move.'
+      : state.connected && state.m === 5 ? 'Wait for the shaft to settle within 5 degrees.'
+      : 'Arm the motor to enable full turns.');
+    const shaftAngle = dialControl ? (state.unwrapped_angle_deg ?? state.angle_deg) : state.angle_deg;
+    document.getElementById('m-act').textContent = (shaftAngle>=0?'+':'') + shaftAngle.toFixed(2) + '\u00B0';
     document.getElementById('m-err').textContent = (state.error_deg>=0?'+':'') + state.error_deg.toFixed(2) + '\u00B0';
     const phDeg = (state.o * 360 / 65536);
     document.getElementById('m-ph').textContent = (phDeg>=0?'+':'') + phDeg.toFixed(1) + '\u00B0';
@@ -706,7 +801,8 @@ setInterval(async () => {
     }
 
     hist.push({
-      cmd: cmdAngle, act: state.angle_deg, err: state.error_deg,
+      cmd: rotating ? turn.command_deg : cmdAngle,
+      act: rotating ? turn.travel_deg : shaftAngle, err: state.error_deg,
       da: (da - 2500)/556, db: (db - 2500)/556, dc: (dc - 2500)/556
     });
     if (hist.length > MAX_HIST) hist.shift();
@@ -793,11 +889,12 @@ function drawGrid(ctx, W, H) {
 
 function render(now) {
   if (!dragging && Math.abs(wheelVel) > 0.05) {
-    sendHelm(cmdAngle + wheelVel); wheelVel *= 0.90;
+    sendHelm(cmdAngle + wheelVel, undefined, dialControl); wheelVel *= 0.90;
   }
   if (mode === 'spring' && !dragging) {
     const nearestDetent = Math.round(cmdAngle / 45) * 45;
-    sendHelm(cmdAngle + (nearestDetent - cmdAngle) * 0.15, 16);
+    if (Math.abs(nearestDetent - cmdAngle) > 0.05)
+      sendHelm(nearestDetent, selectedSlew(), dialControl);
   }
   if (waveMode === 'square') {
     const sq = (Math.floor(now / 3500) % 2 === 0) ? 60 : -60;
@@ -897,9 +994,10 @@ function render(now) {
       }
       ctx.stroke();
     };
-    plotLine(ctx1, W1, H1, 'cmd', 140, C.bayInk, 2.1);
-    plotLine(ctx1, W1, H1, 'act', 140, C.skyInk, 3.0);
-    plotLine(ctx1, W1, H1, 'err', 140, C.moss, 1.6);
+    const positionScale = Math.max(140, ...hist.flatMap(p => [Math.abs(p.cmd), Math.abs(p.act)])) * 1.05;
+    plotLine(ctx1, W1, H1, 'cmd', positionScale, C.bayInk, 2.1);
+    plotLine(ctx1, W1, H1, 'act', positionScale, C.skyInk, 3.0);
+    plotLine(ctx1, W1, H1, 'err', positionScale, C.moss, 1.6);
 
     const ctx2 = s2.getContext('2d'), W2 = s2.width, H2 = s2.height;
     ctx2.clearRect(0, 0, W2, H2);
