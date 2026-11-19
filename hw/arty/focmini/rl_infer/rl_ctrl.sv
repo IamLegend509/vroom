@@ -33,6 +33,7 @@ module rl_ctrl #(
   input  logic               init,                      // reset controller state (ARM); needs !busy
   input  logic signed [31:0] init_ref,                  // OuterIO initial reference
   input  logic [2:0]         smooth_sh,                 // 0=raw bit-exact; >0 EMA shift on applied dq voltage
+  input  logic               obs_corr,                  // 1: phase-current innovation correction; 0: pure model observer
   output logic               busy,
   output logic               done,                      // duties valid (one-cycle pulse)
   output logic [12:0]        duty_a, duty_b, duty_c,
@@ -212,7 +213,7 @@ module rl_ctrl #(
         O9: begin q1 <= ssq + p14; mul(d1, cp, O10); end
         O10: begin t1 <= p14; mul(q1, sp, O11); end
         O11: begin innov <= ia - (t1 - p14); mul(ia - (t1 - p14), KG, O12); end
-        O12: begin gi <= p14; mul(p14, cp, O13); end
+        O12: begin gi <= obs_corr ? p14 : 32'sd0; mul(obs_corr ? p14 : 32'sd0, cp, O13); end
         O13: begin d2 <= clipv(d1 + p14, 2 * ONE); mul(gi, sp, O14); end
         O14: begin
           d <= d2; q <= clipv(q1 - p14, 2 * ONE);

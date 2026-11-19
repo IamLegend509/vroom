@@ -13,8 +13,11 @@
 //   - Boot/reset is disarmed (PWM=0, EN=0, SLEEP=0, RESET=0).
 //   - Exact uppercase UART commands: ARM, TEST, PING, STOP, and immediate '!'.
 //   - 10 us debounced nFAULT kill + sticky fault latch.
-//   - Observer / measured overcurrent trip, speed trip, encoder health/timeout trip,
-//     actor overrun trip, 500 ms UART keepalive timeout, and bounded 16 s run timer.
+//   - Trips (result code q): 4 nFAULT, 6 encoder invalid/stale,
+//     8 UART keepalive > 500 ms, 9 UART framing, 11 actor overrun,
+//     12 observer |id|/|iq| > 0.27 A, 13 |speed| > 25 rad/s.
+//   - Not implemented: measured-current trip (single sensor uncalibrated, cal_gain = 0)
+//     and a run-time cap (interactive use); the bench supply current limit is the hard bound.
 module rl_closed_loop_top #(
   parameter int POLL_CYCLES = 20000,         // 5 kHz (200 us) AS5600 polling at 400 kHz I2C
   parameter int TELEMETRY_CYCLES = 2500000,  // 40 Hz UART telemetry
@@ -26,7 +29,7 @@ module rl_closed_loop_top #(
   parameter int MS_CYCLES = 100000,          // 1 ms timer
   parameter int WAKE_CYCLES = 1000000,       // 10 ms DRV8313 wake/reset
   parameter int ENC_TIMEOUT = 10000000,      // 100 ms encoder timeout
-  parameter int KEEPALIVE_CYCLES = 200000000,// 2.0 s host keepalive
+  parameter int KEEPALIVE_CYCLES = 50000000, // 500 ms host keepalive (PING/D/S/M; helm_server pings every 150 ms)
   parameter int ARM_CYCLES = 500000000       // 5 s arm expiry
 ) (
   input  wire clk,
@@ -126,7 +129,9 @@ module rl_closed_loop_top #(
   reg [31:0] boot_age = 0, arm_age = 0, keep_age = 0, enc_age = 32'hffffffff;
   reg enc_seen = 0, enc_good = 0;
   wire frame_good = enc_ok && enc_status[5] && !enc_status[3];
-  wire sensors_good = adc_fresh && !adc_clip && enc_seen && enc_good && enc_age < ENC_TIMEOUT;
+  // The phase-A ADC is not used for control (cal_gain = 0, obs_corr = 0; the bench sensor is
+  // non-functional), so it does not gate arming or trip the drive; raw counts stay in telemetry.
+  wire sensors_good = enc_seen && enc_good && enc_age < ENC_TIMEOUT;
   wire monitor_fault = (state == ARMED) || (state == STARTING) || (state == RUN);
 
   // 10 us (1000 clocks) digital glitch filter on fault_n
@@ -150,23 +155,38 @@ module rl_closed_loop_top #(
   assign sleep_n = (state != IDLE && state != FAULT) && !rst && !stop && !cut;
   assign reset_n = (state == SETTLE || monitor_fault) && !rst && !stop && !cut;
 
-  // Calibration & interactive closed-loop position/RL mode:
-  //   0..499 ms   : 50% duty (cal_n=0), average zero ADC sum
-  //   500..1999 ms: hold d-axis vector at cal_e16=0, cal_n=3641 (1.0V / 4.5V * 16384),
-  //                 capture settled mechanical angle th0 -> cal_off, latch active_target=th0
-  //   >=2000 ms   : interactive on-chip FPGA outer P position loop -> NN RL inner/outer actors
-  //                 stage h: cal_mode ? {2'b00, rl_mode} : (rl_mode ? 3'd4 [smoothed] : 3'd2 [raw])
-  wire [2:0] stage = (elapsed_ms < 2000) ? {2'b00, rl_mode} :
-                     (rl_mode ? 3'd4 : 3'd2);
-  wire cal_mode = (elapsed_ms < 2000);
-  wire signed [15:0] cal_n = (elapsed_ms < 500) ? 16'sd0 : 16'sd3641; // 1.0V vector for alignment
-  wire [15:0] cal_e16 = 16'd0;
-  reg cal_dir_neg = 1'b1; // Verified on this physical setup: +phase decreases AS5600 counts
+  // Calibration (cal_mode: rl_ctrl outputs a fixed d-axis vector cal_n at angle cal_e16), then RL:
+  //   0..499 ms    : 50% duty (cal_n=0); zero ADC sum latched at 450 ms
+  //   500..1499 ms : hold d-axis vector at e16=0, cal_n=7282 (2.0 V of Vdc/2=4.5 V; ~0.17 A into an
+  //                  assumed 12 ohm). Rotor angle th_a latched at 1490 ms.
+  //   1500..2499 ms: rotate the vector one electrical turn forward (65.536 e16/ms); th_b at 2490 ms
+  //   2500..3499 ms: rotate back to e16=0
+  //   3500..3999 ms: hold at e16=0; th_c at 3990 ms, then:
+  //                  travel = wrap(th_b - th_a) must be 585 +/- 120 counts (4096/7 per electrical
+  //                  turn: checks the 7 pole-pair assumption) and |wrap(th_c - th_a)| < 60 counts,
+  //                  else FAULT q=14 (refuse to run). Direction: travel < 0 -> cal_dir_neg = 1.
+  //                  Electrical zero: e16 = (dir ? -112 : +112) * th + cal_off = 0 at th_c.
+  //   after        : on-chip P position loop -> speed ref -> RL outer/inner actors.
+  //   stage h: cal_mode ? {2'b00, rl_mode} : (rl_mode ? 3'd4 [smoothed] : 3'd2 [raw])
+  reg calibrated = 1'b0;
+  wire cal_mode = !calibrated;
+  wire [2:0] stage = cal_mode ? {2'b00, rl_mode} : (rl_mode ? 3'd4 : 3'd2);
+  wire signed [15:0] cal_n = (elapsed_ms < 500) ? 16'sd0 : 16'sd7282;
+  reg [31:0] cal_acc = 32'd0;                 // e16 in Q.16 (upper 16 bits)
+  wire [15:0] cal_e16 = cal_acc[31:16];
+  reg cal_dir_neg = 1'b1;                     // measured at 3990 ms each ARM
   reg cal_sign_neg = 1'b0;
   reg [15:0] cal_off = 16'd0;
   reg [15:0] cal_zero = 16'd18960; // 1185 * 16 default, updated at t=450ms
-  wire [16:0] cal_gain = 17'd0;    // Single uncalibrated sensor: use pure model observer (KG*0) so raw ADC noise cannot destabilize dq
-  reg calibrated = 1'b0;
+  wire [16:0] cal_gain = 17'd0;    // phase-A sensor gain not calibrated: observer correction disabled (obs_corr=0)
+  reg [11:0] th_a = 12'd0, th_b = 12'd0;
+  reg signed [15:0] cal_travel = 16'sd0;      // telemetry ct=
+  wire signed [12:0] trav_sub = {1'b0, th_b} - {1'b0, th_a};
+  wire signed [11:0] trav = trav_sub[11:0];
+  wire signed [12:0] ret_sub = {1'b0, enc_angle} - {1'b0, th_a};
+  wire signed [11:0] ret = ret_sub[11:0];
+  wire trav_ok = (trav >= 12'sd465 && trav <= 12'sd705) || (trav <= -12'sd465 && trav >= -12'sd705);
+  wire ret_ok = (ret < 12'sd60) && (ret > -12'sd60);
   reg [3:0] passed = 4'd0;
 
   // Speed estimator from 5 kHz AS5600 polls over a 16-poll (3.2 ms) window:
@@ -188,7 +208,7 @@ module rl_closed_loop_top #(
   always @(posedge clk) begin
     dth_valid <= 1'b0;
     w_inst_valid <= 1'b0;
-    if (rst || state != RUN) begin
+    if (rst || state != RUN || !calibrated) begin   // direction is only known after calibration
       w_f <= 0; w_inst_r <= 0; dth_r <= 0; enc_ptr <= 0; enc_fill <= 0;
       if (enc_done && frame_good) last_enc_th <= enc_angle;
     end else begin
@@ -213,7 +233,7 @@ module rl_closed_loop_top #(
   end
 
   // ---------------- Outer FPGA position P-loop -> NN speed ref ----------------
-  // active_target tracks enc_angle until calibrated (t=1990 ms), then latches UART cmd_target.
+  // active_target tracks enc_angle until calibrated (t=3990 ms), then latches UART cmd_target.
   // pos_err = signed wrapped (active_target - enc_angle). With cal_dir_neg=1, increasing enc_angle
   // corresponds to w < 0, so ref_w = cal_dir_neg ? -kpos*peff : +kpos*peff (kpos = 20 Q.14/count),
   // clamped to +/- w_lim (cmd_slew * 364 Q.14, ~0.4 rad/s per step). Pipelined for 100 MHz timing.
@@ -265,7 +285,7 @@ module rl_closed_loop_top #(
     .cal_dir_neg(cal_dir_neg), .cal_sign_neg(cal_sign_neg),
     .cal_off(cal_off), .cal_zero(cal_zero), .cal_gain(cal_gain), .cal_phase(2'd0),
     .cal_mode(cal_mode), .cal_e16(cal_e16), .cal_n(cal_n),
-    .init(ctrl_init), .init_ref(32'sd0), .smooth_sh(rl_mode ? 3'd4 : 3'd0),
+    .init(ctrl_init), .init_ref(32'sd0), .smooth_sh(rl_mode ? 3'd4 : 3'd0), .obs_corr(1'b0),
     .busy(ctrl_busy), .done(ctrl_done),
     .duty_a(duty_a), .duty_b(duty_b), .duty_c(duty_c),
     .overrun(ctrl_overrun),
@@ -281,16 +301,29 @@ module rl_closed_loop_top #(
   assign pwm_b = running && (carrier < active_b);
   assign pwm_c = running && (carrier < active_c);
 
+  // Run-time limits (registered for timing; active only in RUN after calibration):
+  //   obs_over : observer |id| or |iq| > 0.27 A (16384, Q.14 of 0.27 A) -- the trained trip level.
+  //              With cal_gain = 0 the observer is the model prediction, not a measurement; the
+  //              bench supply current limit (0.3 A) remains the hardware bound.
+  //   overspeed: |w_f| > 25 rad/s (22756, Q.14 of 18 rad/s); the position loop requests <= 18 rad/s.
+  reg obs_over = 1'b0, overspeed = 1'b0;
+  always @(posedge clk) begin
+    obs_over  <= (state == RUN) && calibrated &&
+                 (dbg_id > 32'sd16384 || dbg_id < -32'sd16384 || dbg_iq > 32'sd16384 || dbg_iq < -32'sd16384);
+    overspeed <= (state == RUN) && calibrated && (w_f > 32'sd22756 || w_f < -32'sd22756);
+  end
+
   reg [3:0] trip;
   always @* begin
     trip = 0;
     if (monitor_fault) begin
       if (fault_sync[1]) trip = 4;
-      else if (!adc_fresh || adc_clip) trip = 5;
       else if (!enc_seen || !enc_good || enc_age >= ENC_TIMEOUT) trip = 6;
       else if (state == RUN && keep_age >= KEEPALIVE_CYCLES) trip = 8;
       else if (rx_error) trip = 9;
       else if (state == RUN && ctrl_overrun) trip = 11;
+      else if (obs_over) trip = 12;
+      else if (overspeed) trip = 13;
     end
   end
 
@@ -361,7 +394,7 @@ module rl_closed_loop_top #(
         end
         STARTING: if (carrier == PWM_PERIOD - 1) begin
           active_a <= 2500; active_b <= 2500; active_c <= 2500;
-          ms_counter <= 0; elapsed_ms <= 0; tick_cnt <= 0; state <= RUN; keep_age <= 0;
+          ms_counter <= 0; elapsed_ms <= 0; tick_cnt <= 0; state <= RUN; keep_age <= 0; cal_acc <= 32'd0;
         end
         RUN: begin
           if (sweep) control_reject <= 1;
@@ -375,12 +408,25 @@ module rl_closed_loop_top #(
           if (ms_counter == MS_CYCLES - 1) begin
             ms_counter <= 0;
             if (elapsed_ms == 16'd450) cal_zero <= adc_sum16;
-            if (elapsed_ms == 16'd1990) begin
-              // Lock electrical zero: e16 = (dir * 112 * th + cal_off) = 0 => cal_off = 112 * th (when dir_neg=1)
-              cal_off <= (16'(enc_angle) * 16'd112);
-              calibrated <= 1'b1;
-              ctrl_init <= 1'b1;
-              passed <= 4'hf;
+            if (!calibrated) begin
+              // one electrical turn per 1000 ms: 65536/1000 e16/ms = 4294967 in Q.16
+              if (elapsed_ms >= 16'd1500 && elapsed_ms < 16'd2500) cal_acc <= cal_acc + 32'd4294967;
+              else if (elapsed_ms >= 16'd2500 && elapsed_ms < 16'd3500) cal_acc <= cal_acc - 32'd4294967;
+              if (elapsed_ms == 16'd1490) th_a <= enc_angle;
+              if (elapsed_ms == 16'd2490) th_b <= enc_angle;
+              if (elapsed_ms == 16'd3990) begin
+                cal_travel <= {{4{trav[11]}}, trav};
+                if (!trav_ok || !ret_ok) begin
+                  state <= FAULT; result <= 4'd14;        // direction / pole-pair / follow check failed
+                end else begin
+                  cal_dir_neg <= trav[11];
+                  // e16 = (dir_neg ? -112*th : +112*th) + cal_off = 0 at the held rotor angle
+                  cal_off <= trav[11] ? (16'(enc_angle) * 16'd112) : (16'd0 - 16'(enc_angle) * 16'd112);
+                  calibrated <= 1'b1;
+                  ctrl_init <= 1'b1;
+                  passed <= 4'hf;
+                end
+              end
             end
             if (elapsed_ms < 16'hfffe) elapsed_ms <= elapsed_ms + 1'b1;
           end else ms_counter <= ms_counter + 1'b1;
@@ -398,7 +444,7 @@ module rl_closed_loop_top #(
 
   assign led = {calibrated, last_enc_ok, fault_telemetry[1], heartbeat};
 
-  // ---------------- Telemetry (C3 138-byte format with on-chip RL actor outputs) ----------------
+  // ---------------- Telemetry (C3 146-byte format with on-chip RL actor outputs) ----------------
   //   d  = active position target (12-bit counts)
   //   z  = signed position error  (signed 12-bit counts: active_target - enc_angle)
   //   o  = electrical phase       (dbg_e16)
@@ -406,6 +452,7 @@ module rl_closed_loop_top #(
   //   iq = outer actor iq_ref     (signed 16-bit Q.14)
   //   vd = inner actor nd (out)   (signed 16-bit Q.14)
   //   vq = inner actor nq (out)   (signed 16-bit Q.14)
+  //   ct = calibration travel     (signed counts over one forward electrical turn; ~ +/-585)
   wire [11:0] tel_d = active_target;
   wire [11:0] tel_z = pos_err;
   wire [15:0] tel_o = dbg_e16;
@@ -418,7 +465,7 @@ module rl_closed_loop_top #(
     h = (n < 10) ? (8'h30 + {4'b0, n}) : (8'h41 + {4'b0, n} - 8'd10);
   endfunction
 
-  localparam integer LINE_LEN = 138;
+  localparam integer LINE_LEN = 146;
   reg [LINE_LEN*8-1:0] packet = 0;
   reg [2:0] send_state = 0;
   integer chars_left = 0;
@@ -447,7 +494,8 @@ module rl_closed_loop_top #(
           " h=", h({1'b0, stage}), " k=", h({3'b0, calibrated}), " y=", h(passed),
           " iq=", h(tel_iq[15:12]), h(tel_iq[11:8]), h(tel_iq[7:4]), h(tel_iq[3:0]),
           " vd=", h(tel_vd[15:12]), h(tel_vd[11:8]), h(tel_vd[7:4]), h(tel_vd[3:0]),
-          " vq=", h(tel_vq[15:12]), h(tel_vq[11:8]), h(tel_vq[7:4]), h(tel_vq[3:0]), 8'h0d, 8'h0a};
+          " vq=", h(tel_vq[15:12]), h(tel_vq[11:8]), h(tel_vq[7:4]), h(tel_vq[3:0]),
+          " ct=", h(cal_travel[15:12]), h(cal_travel[11:8]), h(cal_travel[7:4]), h(cal_travel[3:0]), 8'h0d, 8'h0a};
         chars_left <= LINE_LEN; send_state <= 1;
       end
       1: begin tx_start <= 1; send_state <= 2; end

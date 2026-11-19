@@ -30,7 +30,7 @@ PATTERN = re.compile(
     rb'r=([0-9A-F]{3}) b=([0-3]) f=([01]) m=([0-6]) q=([0-9A-F]) n=([0-9A-F]{4}) '
     rb't=([0-9A-F]{4}) p=([0-9A-F]{2}) g=([01]) x=([0-9A-F]{4}) d=([0-9A-F]{3}) '
     rb'z=([0-9A-F]{3}) o=([0-9A-F]{4}) h=([0-5]) k=([01]) y=([0-9A-F])'
-    rb'(?: iq=([0-9A-F]{4}) vd=([0-9A-F]{4}) vq=([0-9A-F]{4}))?\r\n'
+    rb'(?: iq=([0-9A-F]{4}) vd=([0-9A-F]{4}) vq=([0-9A-F]{4})(?: ct=([0-9A-F]{4}))?)?\r\n'
 )
 
 
@@ -212,6 +212,8 @@ class MotorBridge:
                                 upd["rl_iq"] = round(s16(groups[22]) / 16384.0 * 0.27, 4)
                                 upd["rl_vd"] = round(s16(groups[23]) / 16384.0 * 4.5, 3)
                                 upd["rl_vq"] = round(s16(groups[24]) / 16384.0 * 4.5, 3)
+                                if groups[25] is not None:
+                                    upd["cal_travel"] = s16(groups[25])  # counts per forward electrical turn (~+/-585)
                             self.state.update(upd)
                             if row["m"] != 6:
                                 self.fault_logged = False

@@ -83,7 +83,7 @@ class Controller:
 
     def __init__(self, layers_inner, layers_outer, cal):
         self.li, self.lo = layers_inner, layers_outer
-        self.cal = cal                      # dir (+1/-1), off (e16), zero_sum, sign (+1/-1), gain (Q.8)
+        self.cal = cal                      # dir (+1/-1), off (e16), zero_sum, sign (+1/-1), gain (Q.8), corr (0/1, default 1)
         self.est = [0, 0]                   # observer id, iq (i_n)
         self.nprev = [0, 0]                 # normalized dq commanded last tick (applied next tick)
         self.napp = [0, 0]                  # normalized dq applied during the tick just ended
@@ -116,7 +116,7 @@ class Controller:
         # sensed phase: i_x = id cos(e - ph) - iq sin(e - ph), ph = 0 / +120 / -120 electrical degrees
         sp, cp = sincos(e16 - PHASE_E16[c.get('ph', 0)])
         innov = ia - (mulq(cp, d) - mulq(sp, q))
-        gi = mulq(innov, KG)
+        gi = mulq(innov, KG) if c.get('corr', 1) else 0     # corr=0: pure model observer (rl_ctrl obs_corr=0)
         d = clip(d + mulq(cp, gi), -2 * ONE, 2 * ONE)
         q = clip(q - mulq(sp, gi), -2 * ONE, 2 * ONE)
         self.est = [d, q]

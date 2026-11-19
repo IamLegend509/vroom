@@ -10,7 +10,7 @@ module tb_rl_ctrl;
   wire signed [31:0] ia, id, iq, iqr; wire [15:0] e16;
   rl_ctrl dut (.clk(clk), .rst(rst), .tick_go(tick_go), .th(th), .w_in(w), .adc_sum(adc), .ref_in(rf),
     .cal_dir_neg(dneg), .cal_sign_neg(sneg), .cal_off(off), .cal_zero(zero), .cal_gain(gain), .cal_phase(ph), .cal_mode(1'b0), .cal_e16(16'd0), .cal_n(16'sd0),
-    .init(init), .init_ref(32'sd0), .smooth_sh(3'd0), .busy(busy), .done(done), .duty_a(da), .duty_b(db), .duty_c(dc),
+    .init(init), .init_ref(32'sd0), .smooth_sh(3'd0), .obs_corr(1'b1), .busy(busy), .done(done), .duty_a(da), .duty_b(db), .duty_c(dc),
     .overrun(overrun), .dbg_ia(ia), .dbg_id(id), .dbg_iq(iq), .dbg_iqref(iqr), .dbg_nd(), .dbg_nq(), .dbg_e16(e16));
   integer fi, fo, fx, fy, n, k, a0, a1, a2, a3, a4, a5, nt, maxc, c0;
   always @(posedge clk) begin

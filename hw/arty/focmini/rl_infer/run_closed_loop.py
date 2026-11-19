@@ -90,6 +90,16 @@ try:
     print(json.dumps(cmp, indent=2), flush=True)
     if not cmp['bit_exact']:
         raise RuntimeError('rl_ctrl is not bit-exact with ctrl_model.py')
+    # Top-level ARM/calibration/RUN + trip paths (stub XADC/AS5600; real rl_ctrl and actors).
+    command(['iverilog', '-g2012', '-s', 'tb_rl_closed_loop_trips', '-o', 'tb_trips',
+             s + 'rl_infer/tb_rl_closed_loop_trips.sv', s + 'sensor_diag/uart_tx.sv', s + 'position_loop/uart_rx.sv',
+             s + 'interactive_lab/command_rx.sv', s + 'rl_infer/rl_dual_mlp.sv', s + 'rl_infer/rl_ctrl.sv',
+             s + 'rl_infer/rl_closed_loop_top.sv'], 'tb_trips_compile.log')
+    command(['vvp', '-n', 'tb_trips'], 'tb_trips.log', 1800)
+    trips = (run / 'tb_trips.log').read_text(); print(trips, flush=True)
+    if 'TRIP_TB_DONE fails=0 overrun=0' not in trips:
+        raise RuntimeError('top-level trip testbench failed')
+    meta['trip_tb'] = 'passed'
     meta['status'] = 'simulation_passed'; save()
 
     if a.build_host:

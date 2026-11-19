@@ -658,8 +658,39 @@ function paintCtrlMode(rl) {
   document.getElementById('rl-card-sub').textContent = onFpga ? 'On-chip 10 kHz / 1 kHz \u00B7 Q.14' : '144,388 params \u00B7 Q.14';
 }
 
+// Mode change is confirmed by FPGA telemetry (h field -> state.rl_mode). Until it is, show the
+// requested mode (stale in-flight polls would otherwise repaint the old one) and resend M0/M1
+// every 400 ms, at most 3 times; then report that the FPGA did not confirm.
+let pendingMode = null;   // { rl, sentAt, tries }
+function sendCtrlMode(rl) {
+  return postCommand('/api/ctrl_mode', {rl_mode: rl}).catch(e => { commandError = e.message; });
+}
 function setCtrlMode(rl) {
-  postCommand('/api/ctrl_mode', {rl_mode: rl}).then(() => paintCtrlMode(rl)).catch(e => { commandError = e.message; });
+  pendingMode = { rl: !!rl, sentAt: performance.now(), tries: 1 };
+  sendCtrlMode(rl);
+  paintCtrlMode(rl);
+}
+function updateCtrlModeFromState() {
+  if (state.rl_mode === undefined) return;
+  const fpgaRl = !!state.rl_mode;
+  if (pendingMode) {
+    if (fpgaRl === pendingMode.rl) {
+      pendingMode = null;                                   // confirmed
+    } else if (performance.now() - pendingMode.sentAt > 400) {
+      if (pendingMode.tries < 3) {
+        pendingMode.tries += 1; pendingMode.sentAt = performance.now();
+        sendCtrlMode(pendingMode.rl);
+      } else {
+        pendingMode = null;
+        commandError = 'mode change not confirmed by FPGA';
+        document.getElementById('vamp-label').textContent = commandError;
+        paintCtrlMode(fpgaRl);
+        return;
+      }
+    }
+    if (pendingMode) { paintCtrlMode(pendingMode.rl); return; }
+  }
+  paintCtrlMode(fpgaRl);
 }
 function armMotor() {
   pendingHelm = null;
@@ -707,7 +738,10 @@ wCanvas.addEventListener('wheel', (e) => {
   sendHelm(cmdAngle + d, selectedSlew(), true);
 }, { passive: false });
 
+let pollBusy = false;   // one /api/state request at a time, so responses cannot arrive out of order
 setInterval(async () => {
+  if (pollBusy) return;
+  pollBusy = true;
   try {
     const r = await fetch('/api/state');
     state = await r.json();
@@ -736,7 +770,7 @@ setInterval(async () => {
     const phDeg = (state.o * 360 / 65536);
     document.getElementById('m-ph').textContent = (phDeg>=0?'+':'') + phDeg.toFixed(1) + '\u00B0';
     document.getElementById('tr-sse').textContent = Math.abs(state.error_deg).toFixed(2) + '\u00B0';
-    if (state.rl_mode !== undefined) paintCtrlMode(!!state.rl_mode);
+    updateCtrlModeFromState();
 
     if (stepInfo && !stepInfo.done) {
       const prog = (state.angle_deg - stepInfo.start) / stepInfo.delta;
@@ -806,7 +840,7 @@ setInterval(async () => {
       da: (da - 2500)/556, db: (db - 2500)/556, dc: (dc - 2500)/556
     });
     if (hist.length > MAX_HIST) hist.shift();
-  } catch (e) {}
+  } catch (e) {} finally { pollBusy = false; }
 }, 50);
 
 const s1 = document.getElementById('scope1'), s2 = document.getElementById('scope2');
